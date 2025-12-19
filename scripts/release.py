@@ -2,8 +2,8 @@
 """Release script for AutoGLM-GUI.
 
 This script automates the release process:
-1. Bumps the version in pyproject.toml
-2. Commits the change with git
+1. Bumps the version in pyproject.toml and electron/package.json
+2. Commits the changes with git
 3. Creates a git tag for the new version
 
 Usage:
@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent.parent
 PYPROJECT_PATH = ROOT_DIR / "pyproject.toml"
+ELECTRON_PACKAGE_JSON_PATH = ROOT_DIR / "electron" / "package.json"
 
 
 def get_current_version() -> str:
@@ -91,26 +93,59 @@ def update_pyproject_version(new_version: str) -> bool:
     return True
 
 
+def update_electron_package_json_version(new_version: str) -> bool:
+    """Update version in electron/package.json."""
+    print(f"Updating electron/package.json to version {new_version}...")
+
+    if not ELECTRON_PACKAGE_JSON_PATH.exists():
+        print(f"Warning: {ELECTRON_PACKAGE_JSON_PATH} not found, skipping...")
+        return True
+
+    try:
+        # Read and parse JSON
+        content = ELECTRON_PACKAGE_JSON_PATH.read_text(encoding="utf-8")
+        package_data = json.loads(content)
+
+        # Update version
+        package_data["version"] = new_version
+
+        # Write back with pretty formatting
+        ELECTRON_PACKAGE_JSON_PATH.write_text(
+            json.dumps(package_data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        print(f'Updated electron/package.json: "version": "{new_version}"')
+        return True
+
+    except json.JSONDecodeError as e:
+        print(f"Error: Failed to parse {ELECTRON_PACKAGE_JSON_PATH}: {e}")
+        return False
+    except Exception as e:
+        print(f"Error: Failed to update {ELECTRON_PACKAGE_JSON_PATH}: {e}")
+        return False
+
+
 def git_commit_version(version: str, dry_run: bool = False) -> bool:
-    """Commit pyproject.toml with version bump."""
+    """Commit version bumps in pyproject.toml and electron/package.json."""
     print("Committing version bump to git...")
 
     if dry_run:
-        print("[DRY RUN] Would run: git add pyproject.toml")
+        print("[DRY RUN] Would run: git add pyproject.toml electron/package.json")
         print(f'[DRY RUN] Would run: git commit -m "release v{version}"')
         return True
 
     try:
-        # Stage pyproject.toml
+        # Stage pyproject.toml and electron/package.json
         result = subprocess.run(
-            ["git", "add", "pyproject.toml", "uv.lock"],
+            ["git", "add", "pyproject.toml", "electron/package.json", "uv.lock"],
             cwd=ROOT_DIR,
             capture_output=True,
             text=True,
         )
 
         if result.returncode != 0:
-            print(f"Error staging pyproject.toml: {result.stderr}")
+            print(f"Error staging files: {result.stderr}")
             return False
 
         # Commit the change
@@ -236,7 +271,12 @@ def main() -> int:
         print()
 
     if not args.dry_run:
+        # Update pyproject.toml
         if not update_pyproject_version(new_version):
+            return 1
+
+        # Update electron/package.json
+        if not update_electron_package_json_version(new_version):
             return 1
         print()
 
