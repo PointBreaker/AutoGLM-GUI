@@ -652,7 +652,7 @@ export function ScrcpyPlayer({
     >
       <div
         ref={videoContainerRef}
-        className="relative w-full h-full flex items-center justify-center bg-slate-900"
+        className="relative w-full h-full flex items-center justify-center bg-slate-50 dark:bg-slate-900"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

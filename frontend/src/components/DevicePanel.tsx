@@ -9,6 +9,8 @@ import {
   Video,
   Image as ImageIcon,
   MonitorPlay,
+  Fingerprint,
+  ArrowUpDown,
 } from 'lucide-react';
 import { ScrcpyPlayer } from './ScrcpyPlayer';
 import type {
@@ -69,12 +71,14 @@ export function DevicePanel({
     'auto' | 'video' | 'screenshot'
   >('auto');
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [feedbackType, setFeedbackType] = useState<'tap' | 'swipe' | 'error' | 'success'>('success');
   const feedbackTimeoutRef = useRef<number | null>(null);
 
-  const showFeedback = (message: string, duration = 2000) => {
+  const showFeedback = (message: string, duration = 2000, type: 'tap' | 'swipe' | 'error' | 'success' = 'success') => {
     if (feedbackTimeoutRef.current) {
       clearTimeout(feedbackTimeoutRef.current);
     }
+    setFeedbackType(type);
     setFeedbackMessage(message);
     feedbackTimeoutRef.current = setTimeout(() => {
       setFeedbackMessage(null);
@@ -398,23 +402,20 @@ export function DevicePanel({
         )}
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
-          <div className="w-full">
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 mb-4">
-                  <Sparkles className="h-8 w-8 text-slate-400" />
-                </div>
-                <p className="font-medium text-slate-900 dark:text-slate-100">
-                  {t.devicePanel.readyToHelp}
-                </p>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  {t.devicePanel.describeTask}
-                </p>
+        <div className="flex-1 overflow-y-auto p-4 min-h-0">
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center min-h-[calc(100%-1rem)]">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 mb-4">
+                <Sparkles className="h-8 w-8 text-slate-400" />
               </div>
-            ) : null}
-
-            {messages.map(message => (
+              <p className="font-medium text-slate-900 dark:text-slate-100">
+                {t.devicePanel.readyToHelp}
+              </p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {t.devicePanel.describeTask}
+              </p>
+            </div>
+          ) : messages.map(message => (
               <div
                 key={message.id}
                 className={`flex ${
@@ -505,7 +506,6 @@ export function DevicePanel({
               </div>
             ))}
             <div ref={messagesEndRef} />
-          </div>
         </div>
 
         {/* Input area */}
@@ -621,8 +621,12 @@ export function DevicePanel({
 
         {/* Feedback message */}
         {feedbackMessage && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-3 py-2 bg-[#1d9bf0] text-white text-sm rounded-xl shadow-lg">
-            {feedbackMessage}
+          <div className="absolute bottom-4 right-4 z-20 flex items-center gap-2 px-3 py-2 bg-[#1d9bf0] text-white text-sm rounded-xl shadow-lg">
+            {feedbackType === 'error' && <AlertCircle className="w-4 h-4" />}
+            {feedbackType === 'tap' && <Fingerprint className="w-4 h-4" />}
+            {feedbackType === 'swipe' && <ArrowUpDown className="w-4 h-4" />}
+            {feedbackType === 'success' && <CheckCircle2 className="w-4 h-4" />}
+            <span>{feedbackMessage}</span>
           </div>
         )}
 
@@ -634,18 +638,20 @@ export function DevicePanel({
             className="w-full h-full"
             enableControl={true}
             onFallback={handleFallback}
-            onTapSuccess={() => showFeedback(t.devicePanel.tapped, 2000)}
+            onTapSuccess={() => showFeedback(t.devicePanel.tapped, 2000, 'tap')}
             onTapError={error =>
               showFeedback(
                 t.devicePanel.tapError.replace('{error}', error),
-                3000
+                3000,
+                'error'
               )
             }
-            onSwipeSuccess={() => showFeedback(t.devicePanel.swiped, 2000)}
+            onSwipeSuccess={() => showFeedback(t.devicePanel.swiped, 2000, 'swipe')}
             onSwipeError={error =>
               showFeedback(
                 t.devicePanel.swipeError.replace('{error}', error),
-                3000
+                3000,
+                'error'
               )
             }
             onStreamReady={handleVideoStreamReady}
