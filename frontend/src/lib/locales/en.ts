@@ -135,4 +135,7 @@ export const en = {
     viewAction: 'View action',
     finalResult: 'Final Result',
   },
+  navigation: {
+    chat: 'Chat',
+  },
 };

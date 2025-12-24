@@ -134,4 +134,7 @@ export const zh = {
     viewAction: '查看动作',
     finalResult: '最终结果',
   },
+  navigation: {
+    chat: '对话',
+  },
 };

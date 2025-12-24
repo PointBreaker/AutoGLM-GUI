@@ -94,10 +94,15 @@ export function loadHistoryItems(deviceId: string): HistoryItem[] {
     const stored = localStorage.getItem(key);
     if (!stored) return [];
 
-    const parsed = JSON.parse(stored);
+    const parsed = JSON.parse(stored) as Array<
+      Omit<HistoryItem, 'startTime' | 'endTime'> & {
+        startTime: string;
+        endTime: string;
+      }
+    >;
 
     // 将日期字符串转回 Date 对象
-    return parsed.map((item: any) => ({
+    return parsed.map(item => ({
       ...item,
       startTime: new Date(item.startTime),
       endTime: new Date(item.endTime),

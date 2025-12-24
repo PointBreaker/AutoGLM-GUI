@@ -338,7 +338,7 @@ export function DevicePanel({
     );
 
     chatStreamRef.current = stream;
-  }, [input, loading, initialized, deviceId, handleInit]);
+  }, [input, loading, initialized, deviceId, deviceName, handleInit]);
 
   const handleReset = useCallback(async () => {
     if (chatStreamRef.current) {
