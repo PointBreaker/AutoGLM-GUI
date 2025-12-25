@@ -30,6 +30,7 @@ export const zh = {
   deviceSidebar: {
     devices: '设备',
     settings: '设置',
+    history: '历史记录',
     addDevice: '添加无线设备',
     addDeviceTooltip:
       '使用前需先通过 USB 线连接设备完成配对。纯无线配对暂不支持，如有需求请前往项目主页提 issue。',
@@ -116,5 +117,26 @@ export const zh = {
     wifiDisconnectError: 'WiFi 断开连接错误',
     wifiManualConnected: 'WiFi 设备已连接',
     wifiManualConnectError: '连接 WiFi 设备失败',
+  },
+  history: {
+    title: '任务历史',
+    description: '查看 {deviceName} 的执行历史',
+    today: '今天',
+    yesterday: '昨天',
+    earlier: '更早',
+    noHistory: '暂无历史记录',
+    noHistoryDescription: '完成的任务将显示在这里',
+    success: '成功',
+    failed: '失败',
+    clearAll: '清空全部',
+    clearAllConfirm: '确认清空该设备的所有历史记录？',
+    deleteItem: '删除',
+    deleteConfirm: '确认删除这条历史记录？',
+    step: '第 {number} 步',
+    viewAction: '查看动作',
+    finalResult: '最终结果',
+  },
+  navigation: {
+    chat: '对话',
   },
 };

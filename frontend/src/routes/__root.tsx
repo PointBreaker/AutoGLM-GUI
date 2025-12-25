@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Github, Globe } from 'lucide-react';
 import { useLocale, useTranslation } from '../lib/i18n-context';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { NavigationSidebar } from '../components/NavigationSidebar';
 
 export const Route = createRootRoute({
   component: RootComponent,
@@ -153,10 +154,15 @@ function Footer() {
 function RootComponent() {
   return (
     <div className="h-screen flex flex-col overflow-hidden">
-      <div className="flex-1 overflow-auto">
-        <Outlet />
+      <div className="flex-1 flex overflow-hidden">
+        <NavigationSidebar />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-auto">
+            <Outlet />
+          </div>
+          <Footer />
+        </div>
       </div>
-      <Footer />
       <TanStackRouterDevtools position="bottom-right" />
     </div>
   );

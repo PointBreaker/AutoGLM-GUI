@@ -30,6 +30,7 @@ export const en = {
   deviceSidebar: {
     devices: 'Devices',
     settings: 'Settings',
+    history: 'History',
     addDevice: 'Add Wireless Device',
     addDeviceTooltip:
       'USB cable pairing is required before first use. Pure wireless pairing is not supported yet. Please submit an issue at the project homepage if you need this feature.',
@@ -117,5 +118,26 @@ export const en = {
     wifiDisconnectError: 'WiFi disconnect error',
     wifiManualConnected: 'WiFi device connected',
     wifiManualConnectError: 'Failed to connect to WiFi device',
+  },
+  history: {
+    title: 'Task History',
+    description: 'Viewing history for {deviceName}',
+    today: 'Today',
+    yesterday: 'Yesterday',
+    earlier: 'Earlier',
+    noHistory: 'No history yet',
+    noHistoryDescription: 'Completed tasks will appear here',
+    success: 'Success',
+    failed: 'Failed',
+    clearAll: 'Clear All',
+    clearAllConfirm: 'Clear all history for this device?',
+    deleteItem: 'Delete',
+    deleteConfirm: 'Delete this history item?',
+    step: 'Step {number}',
+    viewAction: 'View action',
+    finalResult: 'Final Result',
+  },
+  navigation: {
+    chat: 'Chat',
   },
 };

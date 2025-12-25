@@ -13,6 +13,7 @@ import {
   ArrowUpDown,
   ChevronLeft,
   ChevronRight,
+  History,
 } from 'lucide-react';
 import { ScrcpyPlayer } from './ScrcpyPlayer';
 import type {
@@ -26,7 +27,22 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { useTranslation } from '../lib/i18n-context';
+import {
+  createHistoryItem,
+  saveHistoryItem,
+  loadHistoryItems,
+  clearHistory,
+  deleteHistoryItem,
+} from '../utils/history';
+import type { HistoryItem } from '../types/history';
+import { HistoryItemCard } from './HistoryItemCard';
 
 interface Message {
   id: string;
@@ -76,6 +92,8 @@ export function DevicePanel({
   const [feedbackType, setFeedbackType] = useState<
     'tap' | 'swipe' | 'error' | 'success'
   >('success');
+  const [showHistoryPopover, setShowHistoryPopover] = useState(false);
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const feedbackTimeoutRef = useRef<number | null>(null);
 
   const showFeedback = (
@@ -168,6 +186,48 @@ export function DevicePanel({
     }
   }, [isConfigured, config, initialized, handleInit]);
 
+  // Load history items when popover opens
+  useEffect(() => {
+    if (showHistoryPopover) {
+      const items = loadHistoryItems(deviceId);
+      setHistoryItems(items);
+    }
+  }, [showHistoryPopover, deviceId]);
+
+  const handleSelectHistory = (item: HistoryItem) => {
+    const userMessage: Message = {
+      id: `${item.id}-user`,
+      role: 'user',
+      content: item.taskText,
+      timestamp: item.startTime,
+    };
+    const agentMessage: Message = {
+      id: `${item.id}-agent`,
+      role: 'agent',
+      content: item.finalMessage,
+      timestamp: item.endTime,
+      steps: item.steps,
+      success: item.success,
+      thinking: item.thinking,
+      actions: item.actions,
+      isStreaming: false,
+    };
+    setMessages([userMessage, agentMessage]);
+    setShowHistoryPopover(false);
+  };
+
+  const handleClearHistory = () => {
+    if (confirm(t.history.clearAllConfirm)) {
+      clearHistory(deviceId);
+      setHistoryItems([]);
+    }
+  };
+
+  const handleDeleteItem = (itemId: string) => {
+    deleteHistoryItem(deviceId, itemId);
+    // 从列表中移除已删除的项
+    setHistoryItems(prev => prev.filter(item => item.id !== itemId));
+  };
   // Re-initialize when config changes (for already initialized devices)
   useEffect(() => {
     // Skip if not initialized yet or no config
@@ -249,42 +309,67 @@ export function DevicePanel({
         );
       },
       (event: DoneEvent) => {
+        const updatedAgentMessage = {
+          ...agentMessage,
+          content: event.message,
+          success: event.success,
+          isStreaming: false,
+          steps: event.steps,
+          thinking: [...thinkingList],
+          actions: [...actionsList],
+          timestamp: new Date(),
+        };
+
         setMessages(prev =>
           prev.map(msg =>
-            msg.id === agentMessageId
-              ? {
-                  ...msg,
-                  content: event.message,
-                  success: event.success,
-                  isStreaming: false,
-                }
-              : msg
+            msg.id === agentMessageId ? updatedAgentMessage : msg
           )
         );
         setLoading(false);
         chatStreamRef.current = null;
+
+        // 保存到历史记录
+        const historyItem = createHistoryItem(
+          deviceId,
+          deviceName,
+          userMessage,
+          updatedAgentMessage
+        );
+        saveHistoryItem(deviceId, historyItem);
       },
       (event: ErrorEvent) => {
+        const updatedAgentMessage = {
+          ...agentMessage,
+          content: `Error: ${event.message}`,
+          success: false,
+          isStreaming: false,
+          thinking: [...thinkingList],
+          actions: [...actionsList],
+          timestamp: new Date(),
+        };
+
         setMessages(prev =>
           prev.map(msg =>
-            msg.id === agentMessageId
-              ? {
-                  ...msg,
-                  content: `Error: ${event.message}`,
-                  success: false,
-                  isStreaming: false,
-                }
-              : msg
+            msg.id === agentMessageId ? updatedAgentMessage : msg
           )
         );
         setLoading(false);
         setError(event.message);
         chatStreamRef.current = null;
+
+        // 保存失败的任务到历史记录
+        const historyItem = createHistoryItem(
+          deviceId,
+          deviceName,
+          userMessage,
+          updatedAgentMessage
+        );
+        saveHistoryItem(deviceId, historyItem);
       }
     );
 
     chatStreamRef.current = stream;
-  }, [input, loading, initialized, deviceId, handleInit]);
+  }, [input, loading, initialized, deviceId, deviceName, handleInit]);
 
   const handleReset = useCallback(async () => {
     if (chatStreamRef.current) {
@@ -397,6 +482,68 @@ export function DevicePanel({
           </div>
 
           <div className="flex items-center gap-2">
+            {/* History button with Popover */}
+            <Popover
+              open={showHistoryPopover}
+              onOpenChange={setShowHistoryPopover}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-full text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+                  title={t.history.title}
+                >
+                  <History className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+
+              <PopoverContent className="w-96 p-0" align="end" sideOffset={8}>
+                {/* Header */}
+                <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800">
+                  <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">
+                    {t.history.title}
+                  </h3>
+                  {historyItems.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleClearHistory}
+                      className="h-7 text-xs"
+                    >
+                      {t.history.clearAll}
+                    </Button>
+                  )}
+                </div>
+
+                {/* Scrollable content */}
+                <ScrollArea className="h-[400px]">
+                  <div className="p-4 space-y-2">
+                    {historyItems.length > 0 ? (
+                      historyItems.map(item => (
+                        <HistoryItemCard
+                          key={item.id}
+                          item={item}
+                          onSelect={handleSelectHistory}
+                          onDelete={handleDeleteItem}
+                        />
+                      ))
+                    ) : (
+                      <div className="text-center py-8">
+                        <History className="h-12 w-12 text-slate-300 dark:text-slate-700 mx-auto mb-3" />
+                        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                          {t.history.noHistory}
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                          {t.history.noHistoryDescription}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+              </PopoverContent>
+            </Popover>
+
             {!isConfigured ? (
               <Badge variant="warning">
                 <AlertCircle className="w-3 h-3 mr-1" />
@@ -536,9 +683,7 @@ export function DevicePanel({
                 ) : (
                   <div className="max-w-[75%]">
                     <div className="chat-bubble-user px-4 py-3">
-                      <p className="whitespace-pre-wrap text-white dark:text-white">
-                        {message.content}
-                      </p>
+                      <p className="whitespace-pre-wrap">{message.content}</p>
                     </div>
                     <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 text-right">
                       {message.timestamp.toLocaleTimeString()}
