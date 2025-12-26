@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -22,33 +23,164 @@ class DeviceState(str, Enum):
 
 
 @dataclass
-class ManagedDevice:
-    """Extended device information managed by DeviceManager."""
+class DeviceConnection:
+    """Single connection method for a device (USB, WiFi, mDNS, etc.)."""
 
-    # Core device info (from phone_agent.adb.connection.DeviceInfo)
-    device_id: str
-    status: str  # "device" | "offline" | "unauthorized" etc.
+    device_id: str  # USB serial OR IP:port
     connection_type: ConnectionType
+    status: str  # "device" | "offline" | "unauthorized"
+    last_seen: float = field(default_factory=time.time)
+
+    def priority_score(self) -> int:
+        """Calculate connection priority for sorting.
+
+        Priority:
+        1. Connection type (USB > WiFi/Remote > mDNS)
+        2. Status (device > offline > unauthorized)
+        """
+        # Type priority (higher is better)
+        type_priority = {
+            ConnectionType.USB: 300,
+            ConnectionType.WIFI: 200,
+            ConnectionType.REMOTE: 200,
+        }
+
+        # Status priority
+        status_priority = {
+            "device": 30,
+            "offline": 20,
+            "unauthorized": 10,
+        }
+
+        return type_priority.get(self.connection_type, 0) + status_priority.get(
+            self.status, 0
+        )
+
+
+@dataclass
+class ManagedDevice:
+    """Device information aggregated by serial (multiple connections supported)."""
+
+    # Core identity (indexed by serial now)
+    serial: str  # Hardware serial number (ro.serialno)
+
+    # Connections (multiple connection methods)
+    connections: list[DeviceConnection] = field(default_factory=list)
+    primary_connection_idx: int = 0  # Index of primary connection
+
+    # Device metadata
     model: Optional[str] = None
 
-    # Extended management info
+    # Device-level state
     state: DeviceState = DeviceState.ONLINE
-    serial: Optional[str] = None  # True serial from get_device_serial()
-    is_initialized: bool = False  # Whether PhoneAgent exists in state.agents
-    last_seen: float = field(default_factory=time.time)
+    is_initialized: bool = False  # Device-level initialization
+
+    # Timestamps
     first_seen: float = field(default_factory=time.time)
-    error_count: int = 0  # Consecutive polling errors for this device
+    last_seen: float = field(default_factory=time.time)
+    error_count: int = 0  # Consecutive polling errors
+
+    @property
+    def primary_connection(self) -> DeviceConnection:
+        """Get the primary connection."""
+        if not self.connections:
+            raise ValueError(f"Device {self.serial} has no connections")
+        return self.connections[self.primary_connection_idx]
+
+    @property
+    def primary_device_id(self) -> str:
+        """Get the device_id of the primary connection (used in API)."""
+        return self.primary_connection.device_id
+
+    @property
+    def status(self) -> str:
+        """Status of primary connection."""
+        return self.primary_connection.status
+
+    @property
+    def connection_type(self) -> ConnectionType:
+        """Type of primary connection."""
+        return self.primary_connection.connection_type
+
+    def select_primary_connection(self) -> None:
+        """Select best connection as primary based on priority."""
+        if not self.connections:
+            return
+
+        # Sort by priority (descending)
+        sorted_conns = sorted(
+            enumerate(self.connections),
+            key=lambda x: x[1].priority_score(),
+            reverse=True,
+        )
+
+        self.primary_connection_idx = sorted_conns[0][0]
 
     def to_api_dict(self) -> dict:
-        """Convert to API response format (compatible with current /api/devices)."""
+        """Convert to API response format (backward compatible)."""
         return {
-            "id": self.device_id,
+            "id": self.primary_device_id,  # Primary connection's device_id
+            "serial": self.serial,
             "model": self.model or "Unknown",
             "status": self.status,
             "connection_type": self.connection_type.value,
             "is_initialized": self.is_initialized,
-            "serial": self.serial or "",
         }
+
+
+# Helper functions
+
+
+def _is_mdns_connection(device_id: str) -> bool:
+    """Check if device_id is from mDNS discovery."""
+    mdns_patterns = [
+        "._adb-tls-connect._tcp",
+        "._adb-tls-pairing._tcp",
+        ".local.",  # mDNS hostname suffix
+    ]
+    return any(pattern in device_id for pattern in mdns_patterns)
+
+
+def _create_managed_device(
+    serial: str, device_infos: list[DeviceInfo], agents: dict
+) -> ManagedDevice:
+    """Create ManagedDevice from DeviceInfo list."""
+    connections = [
+        DeviceConnection(
+            device_id=d.device_id,
+            connection_type=d.connection_type,
+            status=d.status,
+            last_seen=time.time(),
+        )
+        for d in device_infos
+    ]
+
+    # Extract model (prefer device with model info)
+    model = None
+    for device_info in device_infos:
+        if device_info.model:
+            model = device_info.model
+            break
+
+    # Create managed device
+    managed = ManagedDevice(
+        serial=serial,
+        connections=connections,
+        model=model,
+    )
+
+    # Select primary connection
+    managed.select_primary_connection()
+
+    # Set state
+    managed.state = (
+        DeviceState.ONLINE if managed.status == "device" else DeviceState.OFFLINE
+    )
+
+    # Check if initialized (any connection has agent)
+    managed.is_initialized = any(conn.device_id in agents for conn in connections)
+
+    return managed
 
 
 class DeviceManager:
@@ -66,9 +198,12 @@ class DeviceManager:
 
     def __init__(self, adb_path: str = "adb"):
         """Private constructor. Use get_instance() instead."""
-        # Device state storage
-        self._devices: dict[str, ManagedDevice] = {}
+        # Device state storage (indexed by serial now)
+        self._devices: dict[str, ManagedDevice] = {}  # Key: serial
         self._devices_lock = threading.RLock()  # Reentrant for nested calls
+
+        # Reverse mapping for backward compatibility
+        self._device_id_to_serial: dict[str, str] = {}  # Key: device_id -> serial
 
         # Polling thread control
         self._poll_thread: Optional[threading.Thread] = None
@@ -133,21 +268,47 @@ class DeviceManager:
             return list(self._devices.values())
 
     def get_device(self, device_id: str) -> Optional[ManagedDevice]:
-        """Get single device info by ID."""
+        """Get single device info by ID (deprecated, use get_device_by_serial)."""
+        # For backward compatibility, try to interpret as serial
         with self._devices_lock:
             return self._devices.get(device_id)
+
+    def get_device_by_device_id(self, device_id: str) -> Optional[ManagedDevice]:
+        """Get device by any of its connection device_ids (backward compatibility).
+
+        This method supports looking up devices by either:
+        - Serial number (direct lookup)
+        - Any device_id from any connection (reverse mapping)
+        """
+        with self._devices_lock:
+            # First try direct serial lookup (if device_id IS a serial)
+            if device_id in self._devices:
+                return self._devices[device_id]
+
+            # Use reverse mapping
+            serial = self._device_id_to_serial.get(device_id)
+            if serial:
+                return self._devices.get(serial)
+
+            return None
 
     def update_initialization_status(
         self, device_id: str, is_initialized: bool
     ) -> None:
-        """Update device initialization status (called when agent created/destroyed)."""
-        with self._devices_lock:
-            device = self._devices.get(device_id)
-            if device:
+        """Update device initialization status (device_id -> serial mapping)."""
+        device = self.get_device_by_device_id(device_id)
+
+        if device:
+            with self._devices_lock:
                 device.is_initialized = is_initialized
                 logger.debug(
-                    f"Device {device_id} initialization status: {is_initialized}"
+                    f"Device {device.serial} (via {device_id}) "
+                    f"initialization status: {is_initialized}"
                 )
+        else:
+            logger.warning(
+                f"Cannot update initialization status: device_id {device_id} not found"
+            )
 
     def force_refresh(self) -> None:
         """Trigger immediate device list refresh (blocking)."""
@@ -177,67 +338,160 @@ class DeviceManager:
             self._stop_event.wait(timeout=self._current_interval)
 
     def _poll_devices(self) -> None:
-        """Poll ADB device list and update cache."""
+        """Poll ADB device list and update cache (serial-based aggregation)."""
         from AutoGLM_GUI.adb_plus import get_device_serial
         from AutoGLM_GUI.state import agents
 
-        # Query ADB
+        # Step 1: Get ADB devices and fetch serials
         adb_devices = self._adb_conn.list_devices()
-        current_ids = {d.device_id for d in adb_devices}
+        device_with_serials: list[tuple[DeviceInfo, str]] = []
 
+        for device_info in adb_devices:
+            serial = get_device_serial(device_info.device_id, self._adb_path)
+
+            if not serial:
+                # CRITICAL: Log error and skip this device
+                logger.error(
+                    f"Failed to get serial for device {device_info.device_id}. "
+                    f"Skipping this device. Check ADB access."
+                )
+                continue
+
+            device_with_serials.append((device_info, serial))
+
+        # Step 2: Group devices by serial
+        grouped_by_serial: dict[str, list[DeviceInfo]] = defaultdict(list)
+
+        for device_info, serial in device_with_serials:
+            grouped_by_serial[serial].append(device_info)
+
+        # Step 3: Filter mDNS connections (if other connections exist)
+        for serial, device_infos in grouped_by_serial.items():
+            filtered = []
+            has_non_mdns = False
+
+            # First pass: check if we have non-mDNS connections
+            for device_info in device_infos:
+                if not _is_mdns_connection(device_info.device_id):
+                    has_non_mdns = True
+                    break
+
+            # Second pass: filter out mDNS if non-mDNS exists
+            for device_info in device_infos:
+                if has_non_mdns and _is_mdns_connection(device_info.device_id):
+                    logger.debug(
+                        f"Filtering mDNS connection {device_info.device_id} "
+                        f"(device has clearer connection)"
+                    )
+                    continue
+                filtered.append(device_info)
+
+            grouped_by_serial[serial] = filtered
+
+        # Step 4: Update device cache
         with self._devices_lock:
-            previous_ids = set(self._devices.keys())
+            current_serials = set(grouped_by_serial.keys())
+            previous_serials = set(self._devices.keys())
 
-            # Detect changes
-            added = current_ids - previous_ids
-            removed = previous_ids - current_ids
-            existing = current_ids & previous_ids
+            added_serials = current_serials - previous_serials
+            removed_serials = previous_serials - current_serials
+            existing_serials = current_serials & previous_serials
 
             # Add new devices
-            for device_info in adb_devices:
-                if device_info.device_id in added:
-                    serial = get_device_serial(device_info.device_id, self._adb_path)
-                    managed = ManagedDevice(
-                        device_id=device_info.device_id,
-                        status=device_info.status,
-                        connection_type=device_info.connection_type,
-                        model=device_info.model,
-                        serial=serial,
-                        state=DeviceState.ONLINE
-                        if device_info.status == "device"
-                        else DeviceState.OFFLINE,
-                        is_initialized=device_info.device_id in agents,
-                    )
-                    self._devices[device_info.device_id] = managed
-                    logger.info(
-                        f"Device added: {device_info.device_id} ({serial or 'no serial'})"
-                    )
+            for serial in added_serials:
+                device_infos = grouped_by_serial[serial]
+                managed = _create_managed_device(serial, device_infos, agents)
+                self._devices[serial] = managed
+
+                # Update reverse mapping
+                for conn in managed.connections:
+                    self._device_id_to_serial[conn.device_id] = serial
+
+                logger.info(
+                    f"Device added: {serial} ({managed.model or 'Unknown'}) "
+                    f"via {managed.connection_type.value} ({managed.primary_device_id})"
+                )
 
             # Update existing devices
-            for device_info in adb_devices:
-                if device_info.device_id in existing:
-                    managed = self._devices[device_info.device_id]
-                    managed.status = device_info.status
-                    managed.connection_type = device_info.connection_type
-                    managed.model = device_info.model or managed.model
-                    managed.state = (
-                        DeviceState.ONLINE
-                        if device_info.status == "device"
-                        else DeviceState.OFFLINE
+            for serial in existing_serials:
+                device_infos = grouped_by_serial[serial]
+                managed = self._devices[serial]
+
+                # Rebuild connections
+                old_device_ids = {conn.device_id for conn in managed.connections}
+                new_connections = [
+                    DeviceConnection(
+                        device_id=d.device_id,
+                        connection_type=d.connection_type,
+                        status=d.status,
+                        last_seen=time.time(),
                     )
-                    managed.last_seen = time.time()
-                    managed.is_initialized = device_info.device_id in agents
-                    managed.error_count = 0  # Reset per-device errors on successful poll
+                    for d in device_infos
+                ]
+
+                managed.connections = new_connections
+                managed.last_seen = time.time()
+                managed.error_count = 0
+
+                # Update model if available
+                for device_info in device_infos:
+                    if device_info.model:
+                        managed.model = device_info.model
+                        break
+
+                # Re-select primary connection
+                managed.select_primary_connection()
+
+                # Update state
+                managed.state = (
+                    DeviceState.ONLINE
+                    if managed.status == "device"
+                    else DeviceState.OFFLINE
+                )
+
+                # Sync is_initialized from agents (check any device_id)
+                old_initialized = managed.is_initialized
+                new_initialized = any(
+                    conn.device_id in agents for conn in managed.connections
+                )
+
+                # If was initialized but no longer has agent, keep it True temporarily
+                # This prevents false negatives during connection transitions
+                if old_initialized and not new_initialized:
+                    # Check if any old connection had an agent
+                    had_agent_connection = any(
+                        old_id in agents for old_id in old_device_ids
+                    )
+                    if had_agent_connection:
+                        logger.info(
+                            f"Device {serial} lost agent connection during transition, "
+                            f"keeping is_initialized=True"
+                        )
+                        new_initialized = True
+
+                managed.is_initialized = new_initialized
+
+                # Update reverse mapping
+                new_device_ids = {conn.device_id for conn in managed.connections}
+
+                # Remove stale mappings
+                for old_id in old_device_ids - new_device_ids:
+                    self._device_id_to_serial.pop(old_id, None)
+
+                # Add new mappings
+                for new_id in new_device_ids:
+                    self._device_id_to_serial[new_id] = serial
 
             # Mark removed devices as disconnected
-            for device_id in removed:
-                managed = self._devices[device_id]
+            for serial in removed_serials:
+                managed = self._devices[serial]
                 managed.state = DeviceState.DISCONNECTED
                 managed.last_seen = time.time()
-                logger.warning(f"Device disconnected: {device_id}")
+                logger.warning(f"Device disconnected: {serial} ({managed.model or 'Unknown'})")
 
-                # Optional: Remove after grace period (or keep for history)
-                # For now, keep in cache for UX continuity
+                # Remove reverse mappings
+                for conn in managed.connections:
+                    self._device_id_to_serial.pop(conn.device_id, None)
 
     def _handle_poll_error(self, error: Exception) -> None:
         """Handle polling failure with exponential backoff."""
