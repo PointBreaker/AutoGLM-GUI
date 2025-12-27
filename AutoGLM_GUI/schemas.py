@@ -1,5 +1,7 @@
 """Shared Pydantic models for the AutoGLM-GUI API."""
 
+import re
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -12,6 +14,20 @@ class APIModelConfig(BaseModel):
     top_p: float = 0.85
     frequency_penalty: float = 0.2
 
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, v: str | None) -> str | None:
+        """验证 base_url 格式."""
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        # 检查是否是有效的 HTTP/HTTPS URL
+        if not re.match(r"^https?://", v):
+            raise ValueError("base_url must start with http:// or https://")
+        return v
+
 
 class APIAgentConfig(BaseModel):
     max_steps: int = 100
@@ -19,6 +35,25 @@ class APIAgentConfig(BaseModel):
     lang: str = "cn"
     system_prompt: str | None = None
     verbose: bool = True
+
+    @field_validator("max_steps")
+    @classmethod
+    def validate_max_steps(cls, v: int) -> int:
+        """验证 max_steps 范围."""
+        if v <= 0:
+            raise ValueError("max_steps must be positive")
+        if v > 1000:
+            raise ValueError("max_steps must be <= 1000")
+        return v
+
+    @field_validator("lang")
+    @classmethod
+    def validate_lang(cls, v: str) -> str:
+        """验证 lang 有效性."""
+        allowed_langs = ["cn", "en"]
+        if v not in allowed_langs:
+            raise ValueError(f"lang must be one of {allowed_langs}")
+        return v
 
 
 class InitRequest(BaseModel):
@@ -29,6 +64,16 @@ class InitRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     device_id: str  # 设备 ID（必填）
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        """验证 message 非空."""
+        if not v or not v.strip():
+            raise ValueError("message cannot be empty")
+        if len(v) > 10000:
+            raise ValueError("message too long (max 10000 characters)")
+        return v.strip()
 
 
 class ChatResponse(BaseModel):
@@ -66,6 +111,26 @@ class TapRequest(BaseModel):
     device_id: str | None = None
     delay: float = 0.0
 
+    @field_validator("x", "y")
+    @classmethod
+    def validate_coordinates(cls, v: int) -> int:
+        """验证坐标范围."""
+        if v < 0:
+            raise ValueError("coordinates must be non-negative")
+        if v > 10000:  # 合理的最大屏幕尺寸
+            raise ValueError("coordinates must be <= 10000")
+        return v
+
+    @field_validator("delay")
+    @classmethod
+    def validate_delay(cls, v: float) -> float:
+        """验证 delay 范围."""
+        if v < 0.0:
+            raise ValueError("delay must be non-negative")
+        if v > 60.0:  # 最大等待 60 秒
+            raise ValueError("delay must be <= 60.0 seconds")
+        return v
+
 
 class TapResponse(BaseModel):
     success: bool
@@ -81,6 +146,37 @@ class SwipeRequest(BaseModel):
     device_id: str | None = None
     delay: float = 0.0
 
+    @field_validator("start_x", "start_y", "end_x", "end_y")
+    @classmethod
+    def validate_coordinates(cls, v: int) -> int:
+        """验证坐标范围."""
+        if v < 0:
+            raise ValueError("coordinates must be non-negative")
+        if v > 10000:
+            raise ValueError("coordinates must be <= 10000")
+        return v
+
+    @field_validator("duration_ms")
+    @classmethod
+    def validate_duration(cls, v: int | None) -> int | None:
+        """验证滑动持续时间."""
+        if v is not None:
+            if v < 0:
+                raise ValueError("duration_ms must be non-negative")
+            if v > 10000:  # 最大 10 秒
+                raise ValueError("duration_ms must be <= 10000")
+        return v
+
+    @field_validator("delay")
+    @classmethod
+    def validate_delay(cls, v: float) -> float:
+        """验证 delay 范围."""
+        if v < 0.0:
+            raise ValueError("delay must be non-negative")
+        if v > 60.0:
+            raise ValueError("delay must be <= 60.0 seconds")
+        return v
+
 
 class SwipeResponse(BaseModel):
     success: bool
@@ -92,6 +188,26 @@ class TouchDownRequest(BaseModel):
     y: int
     device_id: str | None = None
     delay: float = 0.0
+
+    @field_validator("x", "y")
+    @classmethod
+    def validate_coordinates(cls, v: int) -> int:
+        """验证坐标范围."""
+        if v < 0:
+            raise ValueError("coordinates must be non-negative")
+        if v > 10000:
+            raise ValueError("coordinates must be <= 10000")
+        return v
+
+    @field_validator("delay")
+    @classmethod
+    def validate_delay(cls, v: float) -> float:
+        """验证 delay 范围."""
+        if v < 0.0:
+            raise ValueError("delay must be non-negative")
+        if v > 60.0:
+            raise ValueError("delay must be <= 60.0 seconds")
+        return v
 
 
 class TouchDownResponse(BaseModel):
@@ -105,6 +221,26 @@ class TouchMoveRequest(BaseModel):
     device_id: str | None = None
     delay: float = 0.0
 
+    @field_validator("x", "y")
+    @classmethod
+    def validate_coordinates(cls, v: int) -> int:
+        """验证坐标范围."""
+        if v < 0:
+            raise ValueError("coordinates must be non-negative")
+        if v > 10000:
+            raise ValueError("coordinates must be <= 10000")
+        return v
+
+    @field_validator("delay")
+    @classmethod
+    def validate_delay(cls, v: float) -> float:
+        """验证 delay 范围."""
+        if v < 0.0:
+            raise ValueError("delay must be non-negative")
+        if v > 60.0:
+            raise ValueError("delay must be <= 60.0 seconds")
+        return v
+
 
 class TouchMoveResponse(BaseModel):
     success: bool
@@ -116,6 +252,26 @@ class TouchUpRequest(BaseModel):
     y: int
     device_id: str | None = None
     delay: float = 0.0
+
+    @field_validator("x", "y")
+    @classmethod
+    def validate_coordinates(cls, v: int) -> int:
+        """验证坐标范围."""
+        if v < 0:
+            raise ValueError("coordinates must be non-negative")
+        if v > 10000:
+            raise ValueError("coordinates must be <= 10000")
+        return v
+
+    @field_validator("delay")
+    @classmethod
+    def validate_delay(cls, v: float) -> float:
+        """验证 delay 范围."""
+        if v < 0.0:
+            raise ValueError("delay must be non-negative")
+        if v > 60.0:
+            raise ValueError("delay must be <= 60.0 seconds")
+        return v
 
 
 class TouchUpResponse(BaseModel):
@@ -153,10 +309,37 @@ class ConfigSaveRequest(BaseModel):
     model_name: str = "autoglm-phone-9b"
     api_key: str | None = None
 
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, v: str) -> str:
+        """验证 base_url 格式."""
+        v = v.strip()
+        if not v:
+            raise ValueError("base_url cannot be empty")
+        if not re.match(r"^https?://", v):
+            raise ValueError("base_url must start with http:// or https://")
+        return v
+
+    @field_validator("model_name")
+    @classmethod
+    def validate_model_name(cls, v: str) -> str:
+        """验证 model_name 非空."""
+        if not v or not v.strip():
+            raise ValueError("model_name cannot be empty")
+        return v.strip()
+
 
 class WiFiConnectRequest(BaseModel):
     device_id: str | None = None
     port: int = 5555
+
+    @field_validator("port")
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        """验证端口范围."""
+        if v < 1 or v > 65535:
+            raise ValueError("port must be between 1 and 65535")
+        return v
 
 
 class WiFiConnectResponse(BaseModel):
@@ -183,6 +366,25 @@ class WiFiManualConnectRequest(BaseModel):
     ip: str  # IP 地址
     port: int = 5555  # 端口，默认 5555
 
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, v: str) -> str:
+        """验证 IP 地址格式."""
+        v = v.strip()
+        # 简单的 IPv4 格式验证
+        ip_pattern = r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+        if not re.match(ip_pattern, v):
+            raise ValueError("invalid IPv4 address format")
+        return v
+
+    @field_validator("port")
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        """验证端口范围."""
+        if v < 1 or v > 65535:
+            raise ValueError("port must be between 1 and 65535")
+        return v
+
 
 class WiFiManualConnectResponse(BaseModel):
     """手动连接 WiFi 响应."""
@@ -200,6 +402,33 @@ class WiFiPairRequest(BaseModel):
     pairing_port: int  # Pairing port (from "Pair device with code" dialog)
     pairing_code: str  # 6-digit pairing code
     connection_port: int = 5555  # Standard ADB connection port (default 5555)
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, v: str) -> str:
+        """验证 IP 地址格式."""
+        v = v.strip()
+        ip_pattern = r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+        if not re.match(ip_pattern, v):
+            raise ValueError("invalid IPv4 address format")
+        return v
+
+    @field_validator("pairing_port", "connection_port")
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        """验证端口范围."""
+        if v < 1 or v > 65535:
+            raise ValueError("port must be between 1 and 65535")
+        return v
+
+    @field_validator("pairing_code")
+    @classmethod
+    def validate_pairing_code(cls, v: str) -> str:
+        """验证配对码格式."""
+        v = v.strip()
+        if not re.match(r"^\d{6}$", v):
+            raise ValueError("pairing_code must be a 6-digit number")
+        return v
 
 
 class WiFiPairResponse(BaseModel):

@@ -14,8 +14,24 @@ if TYPE_CHECKING:
     from phone_agent import PhoneAgent
 
 # Agent instances keyed by device_id
+#
+# IMPORTANT: device_id changes when connection method changes
+# (e.g., USB "ABC123" → WiFi "192.168.1.100:5555")
+#
+# This means the same physical device may have different device_ids:
+#   - USB connection: device_id = hardware serial (e.g., "ABC123DEF")
+#   - WiFi connection: device_id = IP:port (e.g., "192.168.1.100:5555")
+#   - mDNS connection: device_id = service name (e.g., "adb-ABC123._adb-tls-connect._tcp")
+#
+# DeviceManager tracks devices by hardware serial and maintains
+# device_id ↔ serial mapping. Use DeviceManager.get_agent_by_serial()
+# to find agents when device_id changes.
+#
+# See CLAUDE.md "Device Identification" section for details.
 agents: dict[str, "PhoneAgent"] = {}
+
 # Cached configs to rebuild agents on reset
+# Keyed by device_id (same semantics as agents dict)
 agent_configs: dict[str, tuple[ModelConfig, AgentConfig]] = {}
 
 # Scrcpy streaming per device

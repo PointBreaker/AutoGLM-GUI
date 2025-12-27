@@ -281,6 +281,48 @@ Core automation engine from Open-AutoGLM:
   - `apps.py` - Common Chinese app package names and aliases
   - `i18n.py` - Internationalization utilities
 
+### Device Identification (Two-Layer System)
+
+AutoGLM-GUI uses a two-layer device identification system:
+
+**Layer 1: `device_id` (ADB Execution Layer)**
+- **Purpose**: Identifier passed to ADB commands (`adb -s {device_id}`)
+- **Format depends on connection type**:
+  - USB: Hardware serial number (e.g., `ABC123DEF456`)
+  - WiFi: IP address and port (e.g., `192.168.1.100:5555`)
+  - mDNS: Service name (e.g., `adb-243a09b7._adb-tls-connect._tcp`)
+- **Usage**: API endpoints, PhoneAgent initialization, ADB command execution
+- **Note**: `device_id` changes when connection method changes
+
+**Layer 2: `serial` (Device Aggregation Layer)**
+- **Purpose**: Stable, unique identifier for device aggregation in DeviceManager
+- **Format**: Hardware serial number from `ro.serialno` property (e.g., `ABC123DEF456`)
+- **Usage**: Internal device management, connection aggregation
+- **Note**: `serial` never changes regardless of connection method
+
+**Connection Switching Behavior**:
+```
+Example: Device initially connected via USB
+  - device_id: "ABC123DEF456" (USB serial)
+  - serial: "ABC123DEF456"
+
+User switches to WiFi debugging
+  - device_id: "192.168.1.100:5555" (WiFi IP:port) ← Changed!
+  - serial: "ABC123DEF456" ← Unchanged
+
+DeviceManager aggregates both connections:
+  - Maintains device identity via serial
+  - Automatically selects primary connection (USB > WiFi)
+  - API continues using current device_id
+```
+
+**Important for API Integration**:
+- When calling `/api/init`, `/api/chat`, etc., use the current `device_id`
+- `device_id` may change during connection switches
+- PhoneAgent instances are indexed by `device_id` in `state.agents`
+- Connection switches may require agent reinitialization (future improvement: automatic migration)
+- DeviceManager provides `get_agent_by_serial()` to find agents across connection changes
+
 ### Frontend Architecture (`frontend/src/`)
 
 - **`routes/chat.tsx`**: Main chat interface
