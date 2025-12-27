@@ -20,6 +20,7 @@ class DeviceState(str, Enum):
     ONLINE = "online"  # Device connected and responsive
     OFFLINE = "offline"  # Device connected but not responsive
     DISCONNECTED = "disconnected"  # Device not in ADB device list
+    AVAILABLE_MDNS = "available"  # Discovered via mDNS but not connected
 
 
 @dataclass
@@ -125,6 +126,9 @@ class ManagedDevice:
             "status": self.status,
             "connection_type": self.connection_type.value,
             "is_initialized": self.is_initialized,
+            "state": self.state.value,  # Device state (online/offline/disconnected/available)
+            "is_available_only": self.state
+            == DeviceState.AVAILABLE_MDNS,  # mDNS discovered but not connected
         }
 
 
@@ -221,6 +225,11 @@ class DeviceManager:
         self._adb_path = adb_path
         self._adb_conn = ADBConnection(adb_path=adb_path)
 
+        # mDNS discovery support
+        self._mdns_supported: Optional[bool] = None  # Lazy check
+        self._mdns_devices: dict[str, ManagedDevice] = {}  # Key: serial
+        self._enable_mdns_discovery: bool = True  # Feature toggle
+
     @classmethod
     def get_instance(cls, adb_path: str = "adb") -> DeviceManager:
         """Get singleton instance (thread-safe)."""
@@ -263,9 +272,21 @@ class DeviceManager:
                 logger.info("DeviceManager polling stopped")
 
     def get_devices(self) -> list[ManagedDevice]:
-        """Get all cached devices (thread-safe snapshot)."""
+        """Get all cached devices (connected + available mDNS)."""
         with self._devices_lock:
-            return list(self._devices.values())
+            # Merge connected and mDNS devices
+            all_devices = list(self._devices.values())
+
+            # Add mDNS devices that aren't already connected
+            connected_serials = set(self._devices.keys())
+            mdns_only = [
+                dev
+                for serial, dev in self._mdns_devices.items()
+                if serial not in connected_serials
+            ]
+
+            all_devices.extend(mdns_only)
+            return all_devices
 
     def get_device(self, device_id: str) -> Optional[ManagedDevice]:
         """Get single device info by ID (deprecated, use get_device_by_serial)."""
@@ -316,6 +337,27 @@ class DeviceManager:
         self._poll_devices()
 
     # Internal methods
+
+    def _check_mdns_support(self) -> bool:
+        """
+        Check if ADB supports mDNS discovery (lazy initialization).
+
+        Returns:
+            True if supported, False otherwise
+        """
+        if self._mdns_supported is None:
+            from AutoGLM_GUI.adb_plus.version import supports_mdns_services
+
+            self._mdns_supported = supports_mdns_services(self._adb_path)
+
+            if self._mdns_supported:
+                logger.info("ADB mDNS discovery is supported")
+            else:
+                logger.info(
+                    "ADB mDNS discovery not available (requires ADB 30.0.0+)"
+                )
+
+        return self._mdns_supported
 
     def _polling_loop(self) -> None:
         """Background polling loop (runs in thread)."""
@@ -492,6 +534,73 @@ class DeviceManager:
                 # Remove reverse mappings
                 for conn in managed.connections:
                     self._device_id_to_serial.pop(conn.device_id, None)
+
+        # Step 5: Discover mDNS devices (if enabled and supported)
+        if self._enable_mdns_discovery and self._check_mdns_support():
+            from AutoGLM_GUI.adb_plus import discover_mdns_devices, extract_serial_from_mdns
+
+            try:
+                mdns_devices = discover_mdns_devices(self._adb_path)
+
+                with self._devices_lock:
+                    connected_serials = set(self._devices.keys())
+
+                    # Process discovered mDNS devices
+                    for mdns_dev in mdns_devices:
+                        # Extract serial from mDNS name
+                        serial = extract_serial_from_mdns(mdns_dev.name)
+
+                        if not serial:
+                            logger.debug(
+                                f"Could not extract serial from mDNS device: {mdns_dev.name}"
+                            )
+                            continue
+
+                        # Skip if already connected
+                        if serial in connected_serials:
+                            logger.debug(
+                                f"mDNS device {mdns_dev.name} already connected as {serial}"
+                            )
+                            continue
+
+                        # Create or update AVAILABLE_MDNS device
+                        if serial not in self._mdns_devices:
+                            # Create minimal device info
+                            available_device = ManagedDevice(
+                                serial=serial,
+                                connections=[
+                                    DeviceConnection(
+                                        device_id=f"{mdns_dev.ip}:{mdns_dev.port}",
+                                        connection_type=ConnectionType.REMOTE,
+                                        status="available",  # Not connected yet
+                                        last_seen=time.time(),
+                                    )
+                                ],
+                                state=DeviceState.AVAILABLE_MDNS,
+                                model=None,  # Unknown until connected
+                                is_initialized=False,
+                            )
+                            self._mdns_devices[serial] = available_device
+                            logger.info(
+                                f"Discovered mDNS device: {mdns_dev.name} at {mdns_dev.ip}:{mdns_dev.port}"
+                            )
+                        else:
+                            # Update last_seen
+                            self._mdns_devices[serial].last_seen = time.time()
+
+                    # Clean up stale mDNS devices (not seen for 60s)
+                    current_time = time.time()
+                    stale_serials = [
+                        serial
+                        for serial, dev in self._mdns_devices.items()
+                        if current_time - dev.last_seen > 60
+                    ]
+                    for serial in stale_serials:
+                        del self._mdns_devices[serial]
+                        logger.debug(f"Removed stale mDNS device: {serial}")
+
+            except Exception as e:
+                logger.debug(f"mDNS discovery failed: {e}")
 
     def _handle_poll_error(self, error: Exception) -> None:
         """Handle polling failure with exponential backoff."""

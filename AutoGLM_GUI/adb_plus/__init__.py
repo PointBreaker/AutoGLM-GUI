@@ -9,6 +9,7 @@ from .device import check_device_available
 from .pair import pair_device
 from .mdns import discover_mdns_devices, MdnsDevice
 from .qr_pair import qr_pairing_manager
+from .version import get_adb_version, supports_mdns_services
 
 __all__ = [
     "ADBKeyboardInstaller",
@@ -25,4 +26,6 @@ __all__ = [
     "discover_mdns_devices",
     "MdnsDevice",
     "qr_pairing_manager",
+    "get_adb_version",
+    "supports_mdns_services",
 ]
