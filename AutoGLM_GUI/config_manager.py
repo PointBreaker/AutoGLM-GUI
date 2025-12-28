@@ -387,6 +387,11 @@ class UnifiedConfigManager:
         Returns:
             ConfigModel: 验证后的配置对象
         """
+        # 首次加载：如果文件层为空且配置文件存在，自动加载
+        if not self._file_layer.to_dict() and self._config_path.exists():
+            logger.debug("Auto-loading config file on first access")
+            self.load_file_config()
+
         # 重新加载文件（热重载支持）
         if reload_file:
             self.load_file_config(force_reload=True)

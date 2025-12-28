@@ -38,6 +38,60 @@ apply_patches()
 router = APIRouter()
 
 
+def _setup_adb_keyboard(device_id: str) -> None:
+    """检查并自动安装 ADB Keyboard。
+
+    Args:
+        device_id: 设备 ID
+    """
+    from AutoGLM_GUI.adb_plus import ADBKeyboardInstaller
+
+    logger.info(f"Checking ADB Keyboard for device {device_id}...")
+    installer = ADBKeyboardInstaller(device_id=device_id)
+    status = installer.get_status()
+
+    if not (status["installed"] and status["enabled"]):
+        logger.info(f"Setting up ADB Keyboard for device {device_id}...")
+        success, message = installer.auto_setup()
+        if success:
+            logger.info(f"✓ Device {device_id}: {message}")
+        else:
+            logger.warning(f"✗ Device {device_id}: {message}")
+    else:
+        logger.info(f"✓ Device {device_id}: ADB Keyboard ready")
+
+
+def _initialize_agent_with_config(
+    device_id: str,
+    model_config: ModelConfig,
+    agent_config: AgentConfig,
+) -> None:
+    """使用给定配置初始化 Agent。
+
+    Args:
+        device_id: 设备 ID
+        model_config: 模型配置
+        agent_config: Agent 配置
+
+    Raises:
+        Exception: 初始化失败时抛出异常
+    """
+    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
+
+    # Setup ADB Keyboard first
+    _setup_adb_keyboard(device_id)
+
+    # Initialize agent
+    manager = PhoneAgentManager.get_instance()
+    manager.initialize_agent(
+        device_id=device_id,
+        model_config=model_config,
+        agent_config=agent_config,
+        takeover_callback=non_blocking_takeover,
+    )
+    logger.info(f"Agent initialized successfully for device {device_id}")
+
+
 def _create_sse_event(
     event_type: str, data: dict[str, Any], role: str = "assistant"
 ) -> dict[str, Any]:
@@ -68,9 +122,7 @@ def _release_device_lock_when_done(
 @router.post("/api/init")
 def init_agent(request: InitRequest) -> dict:
     """初始化 PhoneAgent（多设备支持）。"""
-    from AutoGLM_GUI.adb_plus import ADBKeyboardInstaller
     from AutoGLM_GUI.config_manager import config_manager
-    from AutoGLM_GUI.logger import logger
 
     req_model_config = request.model or APIModelConfig()
     req_agent_config = request.agent or APIAgentConfig()
@@ -85,21 +137,6 @@ def init_agent(request: InitRequest) -> dict:
     config_manager.load_file_config()
     config_manager.sync_to_env()
     config.refresh_from_env()
-
-    # 检查并自动安装 ADB Keyboard
-    logger.info(f"Checking ADB Keyboard for device {device_id}...")
-    installer = ADBKeyboardInstaller(device_id=device_id)
-    status = installer.get_status()
-
-    if not (status["installed"] and status["enabled"]):
-        logger.info(f"Setting up ADB Keyboard for device {device_id}...")
-        success, message = installer.auto_setup()
-        if success:
-            logger.info(f"✓ Device {device_id}: {message}")
-        else:
-            logger.warning(f"✗ Device {device_id}: {message}")
-    else:
-        logger.info(f"✓ Device {device_id}: ADB Keyboard ready")
 
     base_url = req_model_config.base_url or config.base_url
     api_key = req_model_config.api_key or config.api_key
@@ -129,17 +166,9 @@ def init_agent(request: InitRequest) -> dict:
         verbose=req_agent_config.verbose,
     )
 
-    # Initialize agent via PhoneAgentManager (thread-safe, transactional)
-    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
-
-    manager = PhoneAgentManager.get_instance()
+    # Initialize agent (includes ADB Keyboard setup)
     try:
-        manager.initialize_agent(
-            device_id=device_id,
-            model_config=model_config,
-            agent_config=agent_config,
-            takeover_callback=non_blocking_takeover,
-        )
+        _initialize_agent_with_config(device_id, model_config, agent_config)
     except Exception as e:
         logger.error(f"Failed to initialize agent: {e}")
         raise HTTPException(status_code=500, detail=str(e))
