@@ -1,6 +1,14 @@
 """Device discovery routes."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter
+
+if TYPE_CHECKING:
+    from AutoGLM_GUI.device_manager import ManagedDevice
+    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
 
 from AutoGLM_GUI.adb_plus.qr_pair import qr_pairing_manager
 from AutoGLM_GUI.logger import logger
@@ -22,6 +30,45 @@ from AutoGLM_GUI.schemas import (
     QRPairCancelResponse,
 )
 
+
+def _build_device_response_with_agent(
+    device: ManagedDevice,
+    agent_manager: PhoneAgentManager
+) -> dict:
+    """组合设备信息和 Agent 状态（API 层职责）。
+
+    Args:
+        device: ManagedDevice 实例
+        agent_manager: PhoneAgentManager 实例
+
+    Returns:
+        dict: 完整的设备响应，匹配 DeviceResponse schema
+    """
+    # 获取纯设备信息
+    response = device.to_dict()
+
+    # 通过 serial 查找 Agent（支持连接切换）
+    agent_device_id = agent_manager.find_agent_by_serial(device.serial)
+
+    if agent_device_id:
+        metadata = agent_manager.get_metadata(agent_device_id)
+
+        if metadata:
+            response["agent"] = {
+                "state": metadata.state.value,
+                "created_at": metadata.created_at,
+                "last_used": metadata.last_used,
+                "error_message": metadata.error_message,
+                "model_name": metadata.model_config.model_name,
+            }
+        else:
+            response["agent"] = None
+    else:
+        response["agent"] = None
+
+    return response
+
+
 router = APIRouter()
 
 
@@ -41,9 +88,9 @@ def list_devices() -> DeviceListResponse:
 
     managed_devices = device_manager.get_devices()
 
-    # 包含 Agent 状态
+    # API 层负责聚合设备信息和 Agent 状态
     devices_with_agents = [
-        d.to_api_dict_with_agent(agent_manager) for d in managed_devices
+        _build_device_response_with_agent(d, agent_manager) for d in managed_devices
     ]
 
     return DeviceListResponse(devices=devices_with_agents)

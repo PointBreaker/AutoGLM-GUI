@@ -7,14 +7,11 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from phone_agent.adb.connection import ADBConnection, ConnectionType, DeviceInfo
 
 from AutoGLM_GUI.logger import logger
-
-if TYPE_CHECKING:
-    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
 
 
 class DeviceState(str, Enum):
@@ -119,19 +116,13 @@ class ManagedDevice:
 
         self.primary_connection_idx = sorted_conns[0][0]
 
-    def to_api_dict_with_agent(self, agent_manager: PhoneAgentManager) -> dict:
-        """转换为 API 响应格式,包含 Agent 状态.
-
-        通过 serial 查找 Agent,处理连接切换场景.
-
-        Args:
-            agent_manager: PhoneAgentManager 实例
+    def to_dict(self) -> dict:
+        """转换为纯设备信息字典（不包含 Agent 状态）。
 
         Returns:
-            dict: 设备信息及可选的 Agent 状态
+            dict: 设备基础信息，匹配 DeviceResponse schema（无 agent 字段）
         """
-        # 基础设备信息
-        result = {
+        return {
             "id": self.primary_device_id,
             "serial": self.serial,
             "model": self.model or "Unknown",
@@ -140,30 +131,6 @@ class ManagedDevice:
             "state": self.state.value,
             "is_available_only": self.state == DeviceState.AVAILABLE_MDNS,
         }
-
-        # 通过 serial 查找 Agent (处理连接切换)
-        agent_device_id = agent_manager.find_agent_by_serial(self.serial)
-
-        if agent_device_id:
-            # Agent 存在(可能在不同的 device_id 下)
-            metadata = agent_manager.get_metadata(agent_device_id)
-
-            if metadata:
-                result["agent"] = {
-                    "state": metadata.state.value,
-                    "created_at": metadata.created_at,
-                    "last_used": metadata.last_used,
-                    "error_message": metadata.error_message,
-                    "model_name": metadata.model_config.model_name,
-                }
-            else:
-                # 不应该发生,但安全处理
-                result["agent"] = None
-        else:
-            # 无 Agent 初始化
-            result["agent"] = None
-
-        return result
 
 
 # Helper functions
