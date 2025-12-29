@@ -5,7 +5,7 @@ from .screenshot import Screenshot, capture_screenshot
 from .touch import touch_down, touch_move, touch_up
 from .ip import get_wifi_ip
 from .serial import get_device_serial, extract_serial_from_mdns
-from .device import check_device_available
+from .device import check_device_available, get_device_model
 from .pair import pair_device
 from .mdns import discover_mdns_devices, MdnsDevice
 from .qr_pair import qr_pairing_manager
@@ -22,6 +22,7 @@ __all__ = [
     "get_device_serial",
     "extract_serial_from_mdns",
     "check_device_available",
+    "get_device_model",
     "pair_device",
     "discover_mdns_devices",
     "MdnsDevice",

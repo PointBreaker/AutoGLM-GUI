@@ -4,6 +4,7 @@
 协调大模型(决策)和小模型(执行)的协作
 """
 
+import hashlib
 import time
 import threading
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from .protocols import (
     DualModelEventType,
     ModelRole,
     ModelStage,
+    ThinkingMode,
+    DECISION_ERROR_CONTEXT_TEMPLATE,
 )
 
 
@@ -61,6 +64,75 @@ class StepResult:
     error: Optional[str] = None
 
 
+@dataclass
+class AnomalyState:
+    """异常状态追踪"""
+    consecutive_failures: int = 0
+    consecutive_same_screen: int = 0
+    last_screenshot_hash: str = ""
+    last_action: str = ""
+    repeated_actions: int = 0
+    max_same_screen: int = 3
+    max_failures: int = 5
+    max_repeated_actions: int = 3
+
+    def reset(self):
+        """重置异常状态"""
+        self.consecutive_failures = 0
+        self.consecutive_same_screen = 0
+        self.last_screenshot_hash = ""
+        self.last_action = ""
+        self.repeated_actions = 0
+
+    def check_screenshot(self, screenshot_base64: str) -> bool:
+        """检查截图是否重复，返回 True 表示重复"""
+        current_hash = hashlib.md5(screenshot_base64.encode()[:10000]).hexdigest()
+        is_same = current_hash == self.last_screenshot_hash
+        if is_same:
+            self.consecutive_same_screen += 1
+        else:
+            self.consecutive_same_screen = 0
+        self.last_screenshot_hash = current_hash
+        return is_same and self.consecutive_same_screen >= 2
+
+    def check_action(self, action: str, target: str) -> bool:
+        """检查动作是否重复，返回 True 表示重复"""
+        action_key = f"{action}:{target}"
+        if action_key == self.last_action:
+            self.repeated_actions += 1
+        else:
+            self.repeated_actions = 0
+        self.last_action = action_key
+        return self.repeated_actions >= self.max_repeated_actions
+
+    def record_failure(self):
+        """记录失败"""
+        self.consecutive_failures += 1
+
+    def record_success(self):
+        """记录成功"""
+        self.consecutive_failures = 0
+
+    def has_anomaly(self) -> bool:
+        """是否存在异常"""
+        return (
+            self.consecutive_failures >= self.max_failures or
+            self.consecutive_same_screen >= self.max_same_screen or
+            self.repeated_actions >= self.max_repeated_actions
+        )
+
+    def get_error_context(self) -> str:
+        """生成异常上下文描述"""
+        contexts = []
+        if self.consecutive_same_screen >= 2:
+            contexts.append(f"⚠️ 屏幕连续 {self.consecutive_same_screen} 次无变化，可能原因：网络延迟、点击未生效、页面加载中")
+        if self.consecutive_failures >= 2:
+            contexts.append(f"⚠️ 连续 {self.consecutive_failures} 次操作失败")
+        if self.repeated_actions >= 2:
+            contexts.append(f"⚠️ 相同操作已重复 {self.repeated_actions} 次无效果")
+        return "\n".join(contexts) if contexts else ""
+
+
 class DualModelAgent:
     """
     双模型协调器
@@ -84,12 +156,14 @@ class DualModelAgent:
         device_id: str,
         max_steps: int = 50,
         callbacks: Optional[DualModelCallbacks] = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEEP,
     ):
-        self.decision_model = DecisionModel(decision_config)
+        self.decision_model = DecisionModel(decision_config, thinking_mode)
         self.vision_model = VisionModel(vision_config, device_id)
         self.device_id = device_id
         self.max_steps = max_steps
         self.callbacks = callbacks or DualModelCallbacks()
+        self.thinking_mode = thinking_mode
 
         # 状态
         self.state = DualModelState()
@@ -98,10 +172,13 @@ class DualModelAgent:
         self.step_count: int = 0
         self.stop_event = threading.Event()
 
+        # 异常状态追踪
+        self.anomaly_state = AnomalyState()
+
         # 事件队列(用于SSE)
         self.event_queue: Queue[DualModelEvent] = Queue()
 
-        logger.info(f"双模型协调器初始化完成, 设备: {device_id}")
+        logger.info(f"双模型协调器初始化完成, 设备: {device_id}, 模式: {thinking_mode.value}")
 
     def _emit_event(self, event_type: DualModelEventType, data: dict, model: Optional[ModelRole] = None):
         """发送事件到队列"""
@@ -127,8 +204,9 @@ class DualModelAgent:
         self.current_task = task
         self.step_count = 0
         self.stop_event.clear()
+        self.anomaly_state.reset()
 
-        logger.info(f"开始执行任务: {task[:50]}...")
+        logger.info(f"开始执行任务: {task[:50]}... (模式: {self.thinking_mode.value})")
 
         try:
             # 1. 大模型分析任务
@@ -248,6 +326,12 @@ class DualModelAgent:
 
             # 截图并识别
             screenshot_base64, width, height = self.vision_model.capture_screenshot()
+
+            # 检查截图是否重复
+            is_same_screen = self.anomaly_state.check_screenshot(screenshot_base64)
+            if is_same_screen:
+                logger.warning(f"屏幕连续 {self.anomaly_state.consecutive_same_screen} 次无变化")
+
             screen_desc = self.vision_model.describe_screen(screenshot_base64)
 
             self._update_state(
@@ -282,13 +366,26 @@ class DualModelAgent:
             if self.callbacks.on_decision_start:
                 self.callbacks.on_decision_start()
 
+            # 构建任务上下文，包含异常信息
+            task_context = f"当前应用: {screen_desc.current_app}"
+            error_context = self.anomaly_state.get_error_context()
+            if error_context:
+                task_context += f"\n\n{DECISION_ERROR_CONTEXT_TEMPLATE.format(error_context=error_context)}"
+                logger.info(f"添加异常上下文到决策请求")
+
             # 调用决策模型
             decision = self.decision_model.make_decision(
                 screen_description=screen_desc.description,
-                task_context=f"当前应用: {screen_desc.current_app}",
+                task_context=task_context,
                 on_thinking=self._on_decision_thinking,
                 on_answer=self._on_decision_answer,
             )
+
+            # 检查是否重复操作
+            if decision.action and decision.target:
+                is_repeated = self.anomaly_state.check_action(decision.action, decision.target)
+                if is_repeated:
+                    logger.warning(f"操作重复 {self.anomaly_state.repeated_actions} 次: {decision.action} -> {decision.target}")
 
             self._update_state(
                 decision_result=f"{decision.action}: {decision.target}",
@@ -309,10 +406,23 @@ class DualModelAgent:
 
             # 检查是否完成
             if decision.finished:
+                self.anomaly_state.record_success()
                 return StepResult(
                     step=self.step_count,
                     success=True,
                     finished=True,
+                    decision=decision,
+                    screen_desc=screen_desc,
+                )
+
+            # 处理等待操作
+            if decision.action == "wait":
+                logger.info("执行等待操作...")
+                time.sleep(2)  # 等待2秒
+                return StepResult(
+                    step=self.step_count,
+                    success=True,
+                    finished=False,
                     decision=decision,
                     screen_desc=screen_desc,
                 )
@@ -343,6 +453,12 @@ class DualModelAgent:
                 decision=action_dict,
                 screenshot_base64=screenshot_base64,
             )
+
+            # 记录执行结果
+            if execution.success:
+                self.anomaly_state.record_success()
+            else:
+                self.anomaly_state.record_failure()
 
             self._update_state(
                 vision_action=f"{execution.action_type}: {execution.target}",
@@ -385,6 +501,7 @@ class DualModelAgent:
 
         except Exception as e:
             logger.exception(f"步骤执行异常: {e}")
+            self.anomaly_state.record_failure()
             return StepResult(
                 step=self.step_count,
                 success=False,
@@ -425,6 +542,7 @@ class DualModelAgent:
         self.step_count = 0
         self.stop_event.clear()
         self.state = DualModelState()
+        self.anomaly_state.reset()
         self.decision_model.reset()
 
         # 清空事件队列

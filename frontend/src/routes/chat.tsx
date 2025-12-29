@@ -1,12 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router';
 import * as React from 'react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   connectWifi,
   disconnectWifi,
   listDevices,
   getConfig,
   saveConfig,
+  setDeviceAlias,
   type Device,
   type ConfigSaveRequest,
 } from '../api';
@@ -32,6 +33,10 @@ import {
   EyeOff,
   Server,
   ExternalLink,
+  Zap,
+  Brain,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { useTranslation } from '../lib/i18n-context';
 
@@ -73,6 +78,7 @@ function ChatComponent() {
   const t = useTranslation();
   const [devices, setDevices] = useState<Device[]>([]);
   const [currentDeviceId, setCurrentDeviceId] = useState<string>('');
+  const [deviceThinkingModes, setDeviceThinkingModes] = useState<Record<string, 'fast' | 'deep'>>({});
   const [toast, setToast] = useState<{
     message: string;
     type: ToastType;
@@ -86,10 +92,17 @@ function ChatComponent() {
   const [config, setConfig] = useState<ConfigSaveRequest | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showDecisionApiKey, setShowDecisionApiKey] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [tempConfig, setTempConfig] = useState({
     base_url: '',
     model_name: '',
     api_key: '',
+    thinking_mode: 'deep' as 'fast' | 'deep',
+    dual_model_enabled: false,
+    decision_base_url: '',
+    decision_model_name: '',
+    decision_api_key: '',
   });
 
   useEffect(() => {
@@ -100,11 +113,21 @@ function ChatComponent() {
           base_url: data.base_url,
           model_name: data.model_name,
           api_key: data.api_key || undefined,
+          thinking_mode: data.thinking_mode || 'deep',
+          dual_model_enabled: data.dual_model_enabled || false,
+          decision_base_url: data.decision_base_url || undefined,
+          decision_model_name: data.decision_model_name || undefined,
+          decision_api_key: data.decision_api_key || undefined,
         });
         setTempConfig({
           base_url: data.base_url,
           model_name: data.model_name,
           api_key: data.api_key || '',
+          thinking_mode: (data.thinking_mode as 'fast' | 'deep') || 'deep',
+          dual_model_enabled: data.dual_model_enabled || false,
+          decision_base_url: data.decision_base_url || '',
+          decision_model_name: data.decision_model_name || '',
+          decision_api_key: data.decision_api_key || '',
         });
 
         if (!data.base_url) {
@@ -119,54 +142,54 @@ function ChatComponent() {
     loadConfiguration();
   }, []);
 
-  useEffect(() => {
-    const loadDevices = async () => {
-      try {
-        const response = await listDevices();
+  const loadDevices = useCallback(async () => {
+    try {
+      const response = await listDevices();
 
-        const deviceMap = new Map<string, Device>();
-        const serialMap = new Map<string, Device[]>();
+      const deviceMap = new Map<string, Device>();
+      const serialMap = new Map<string, Device[]>();
 
-        for (const device of response.devices) {
-          if (device.serial) {
-            const group = serialMap.get(device.serial) || [];
-            group.push(device);
-            serialMap.set(device.serial, group);
-          } else {
-            deviceMap.set(device.id, device);
-          }
+      for (const device of response.devices) {
+        if (device.serial) {
+          const group = serialMap.get(device.serial) || [];
+          group.push(device);
+          serialMap.set(device.serial, group);
+        } else {
+          deviceMap.set(device.id, device);
         }
-
-        Array.from(serialMap.values()).forEach(devices => {
-          const remoteDevice = devices.find(
-            (d: Device) => d.connection_type === 'remote'
-          );
-          const selectedDevice = remoteDevice || devices[0];
-          deviceMap.set(selectedDevice.id, selectedDevice);
-        });
-
-        const filteredDevices = Array.from(deviceMap.values());
-        setDevices(filteredDevices);
-
-        if (filteredDevices.length > 0 && !currentDeviceId) {
-          setCurrentDeviceId(filteredDevices[0].id);
-        }
-
-        if (
-          currentDeviceId &&
-          !filteredDevices.find(d => d.id === currentDeviceId)
-        ) {
-          setCurrentDeviceId(filteredDevices[0]?.id || '');
-        }
-      } catch (error) {
-        console.error('Failed to load devices:', error);
       }
-    };
 
+      Array.from(serialMap.values()).forEach(devices => {
+        const remoteDevice = devices.find(
+          (d: Device) => d.connection_type === 'remote'
+        );
+        const selectedDevice = remoteDevice || devices[0];
+        deviceMap.set(selectedDevice.id, selectedDevice);
+      });
+
+      const filteredDevices = Array.from(deviceMap.values());
+      setDevices(filteredDevices);
+
+      if (filteredDevices.length > 0 && !currentDeviceId) {
+        setCurrentDeviceId(filteredDevices[0].id);
+      }
+
+      if (
+        currentDeviceId &&
+        !filteredDevices.find(d => d.id === currentDeviceId)
+      ) {
+        setCurrentDeviceId(filteredDevices[0]?.id || '');
+      }
+    } catch (error) {
+      console.error('Failed to load devices:', error);
+    }
+  }, [currentDeviceId]);
+
+  useEffect(() => {
     loadDevices();
     const interval = setInterval(loadDevices, 3000);
     return () => clearInterval(interval);
-  }, [currentDeviceId]);
+  }, [loadDevices]);
 
   const handleSaveConfig = async () => {
     if (!tempConfig.base_url) {
@@ -179,12 +202,22 @@ function ChatComponent() {
         base_url: tempConfig.base_url,
         model_name: tempConfig.model_name || 'autoglm-phone-9b',
         api_key: tempConfig.api_key || undefined,
+        thinking_mode: tempConfig.thinking_mode,
+        dual_model_enabled: tempConfig.dual_model_enabled,
+        decision_base_url: tempConfig.decision_base_url || undefined,
+        decision_model_name: tempConfig.decision_model_name || undefined,
+        decision_api_key: tempConfig.decision_api_key || undefined,
       });
 
       setConfig({
         base_url: tempConfig.base_url,
         model_name: tempConfig.model_name,
         api_key: tempConfig.api_key || undefined,
+        thinking_mode: tempConfig.thinking_mode,
+        dual_model_enabled: tempConfig.dual_model_enabled,
+        decision_base_url: tempConfig.decision_base_url || undefined,
+        decision_model_name: tempConfig.decision_model_name || undefined,
+        decision_api_key: tempConfig.decision_api_key || undefined,
       });
       setShowConfig(false);
       showToast(t.toasts.configSaved, 'success');
@@ -244,8 +277,8 @@ function ChatComponent() {
 
       {/* Config Dialog */}
       <Dialog open={showConfig} onOpenChange={setShowConfig}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-md h-[75vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Settings className="w-5 h-5 text-[#1d9bf0]" />
               {t.chat.configuration}
@@ -253,7 +286,7 @@ function ChatComponent() {
             <DialogDescription>{t.chat.configureApi}</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
+          <div className="space-y-4 py-4 overflow-y-auto flex-1 min-h-0">
             {/* 预设配置选项 */}
             <div className="space-y-2">
               <Label className="text-sm font-medium">
@@ -265,11 +298,12 @@ function ChatComponent() {
                     <button
                       type="button"
                       onClick={() =>
-                        setTempConfig({
+                        setTempConfig(prev => ({
+                          ...prev,
                           base_url: preset.config.base_url,
                           model_name: preset.config.model_name,
                           api_key: preset.config.api_key,
-                        })
+                        }))
                       }
                       className={`w-full text-left p-3 rounded-lg border transition-all ${
                         tempConfig.base_url === preset.config.base_url &&
@@ -382,9 +416,162 @@ function ChatComponent() {
                 placeholder="autoglm-phone-9b"
               />
             </div>
+
+            {/* 思考模式选项 */}
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">
+                {t.chat.thinkingMode || '思考模式'}
+              </Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setTempConfig({ ...tempConfig, thinking_mode: 'fast' })
+                  }
+                  className={`flex items-center gap-2 p-3 rounded-lg border transition-all ${
+                    tempConfig.thinking_mode === 'fast'
+                      ? 'border-[#1d9bf0] bg-[#1d9bf0]/5'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-[#1d9bf0]/50'
+                  }`}
+                >
+                  <Zap
+                    className={`w-4 h-4 ${
+                      tempConfig.thinking_mode === 'fast'
+                        ? 'text-[#1d9bf0]'
+                        : 'text-slate-400'
+                    }`}
+                  />
+                  <div className="text-left">
+                    <div className="font-medium text-sm text-slate-900 dark:text-slate-100">
+                      {t.chat.fastMode || '快速响应'}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {t.chat.fastModeDesc || '减少思考时间'}
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setTempConfig({ ...tempConfig, thinking_mode: 'deep' })
+                  }
+                  className={`flex items-center gap-2 p-3 rounded-lg border transition-all ${
+                    tempConfig.thinking_mode === 'deep'
+                      ? 'border-[#1d9bf0] bg-[#1d9bf0]/5'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-[#1d9bf0]/50'
+                  }`}
+                >
+                  <Brain
+                    className={`w-4 h-4 ${
+                      tempConfig.thinking_mode === 'deep'
+                        ? 'text-[#1d9bf0]'
+                        : 'text-slate-400'
+                    }`}
+                  />
+                  <div className="text-left">
+                    <div className="font-medium text-sm text-slate-900 dark:text-slate-100">
+                      {t.chat.deepMode || '深度思考'}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {t.chat.deepModeDesc || '完整分析过程'}
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* 高级设置：决策模型配置 */}
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-[#1d9bf0] transition-colors"
+              >
+                {showAdvanced ? (
+                  <ChevronDown className="w-4 h-4" />
+                ) : (
+                  <ChevronRight className="w-4 h-4" />
+                )}
+                {t.chat.advancedSettings || '高级设置（决策模型）'}
+              </button>
+
+              {showAdvanced && (
+                <div className="space-y-3 pl-4 border-l-2 border-slate-200 dark:border-slate-700">
+                  <div className="space-y-2">
+                    <Label htmlFor="decision_base_url">
+                      {t.chat.decisionBaseUrl || '决策模型 Base URL'}
+                    </Label>
+                    <Input
+                      id="decision_base_url"
+                      value={tempConfig.decision_base_url}
+                      onChange={e =>
+                        setTempConfig({
+                          ...tempConfig,
+                          decision_base_url: e.target.value,
+                        })
+                      }
+                      placeholder="https://api-inference.modelscope.cn/v1"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="decision_model_name">
+                      {t.chat.decisionModelName || '决策模型名称'}
+                    </Label>
+                    <Input
+                      id="decision_model_name"
+                      value={tempConfig.decision_model_name}
+                      onChange={e =>
+                        setTempConfig({
+                          ...tempConfig,
+                          decision_model_name: e.target.value,
+                        })
+                      }
+                      placeholder="ZhipuAI/GLM-4.7"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="decision_api_key">
+                      {t.chat.decisionApiKey || '决策模型 API Key'}
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="decision_api_key"
+                        type={showDecisionApiKey ? 'text' : 'password'}
+                        value={tempConfig.decision_api_key}
+                        onChange={e =>
+                          setTempConfig({
+                            ...tempConfig,
+                            decision_api_key: e.target.value,
+                          })
+                        }
+                        placeholder="Leave empty if not required"
+                        className="pr-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          setShowDecisionApiKey(!showDecisionApiKey)
+                        }
+                        className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                      >
+                        {showDecisionApiKey ? (
+                          <EyeOff className="w-4 h-4 text-slate-400" />
+                        ) : (
+                          <Eye className="w-4 h-4 text-slate-400" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          <DialogFooter className="sm:justify-between gap-2">
+          <DialogFooter className="sm:justify-between gap-2 flex-shrink-0">
             <Button
               variant="outline"
               onClick={() => {
@@ -394,6 +581,12 @@ function ChatComponent() {
                     base_url: config.base_url,
                     model_name: config.model_name,
                     api_key: config.api_key || '',
+                    thinking_mode:
+                      (config.thinking_mode as 'fast' | 'deep') || 'deep',
+                    dual_model_enabled: config.dual_model_enabled || false,
+                    decision_base_url: config.decision_base_url || '',
+                    decision_model_name: config.decision_model_name || '',
+                    decision_api_key: config.decision_api_key || '',
                   });
                 }
               }}
@@ -416,6 +609,7 @@ function ChatComponent() {
         onOpenConfig={() => setShowConfig(true)}
         onConnectWifi={handleConnectWifi}
         onDisconnectWifi={handleDisconnectWifi}
+        onRefreshDevices={loadDevices}
       />
 
       {/* Main content */}
@@ -457,10 +651,21 @@ function ChatComponent() {
               <DevicePanel
                 deviceId={device.id}
                 deviceSerial={device.serial}
-                deviceName={device.model}
+                deviceName={device.alias || device.model}
                 config={config}
                 isVisible={device.id === currentDeviceId}
                 isConfigured={!!config?.base_url}
+                thinkingMode={deviceThinkingModes[device.serial] || 'fast'}
+                onThinkingModeChange={(mode) => {
+                  setDeviceThinkingModes(prev => ({
+                    ...prev,
+                    [device.serial]: mode,
+                  }));
+                }}
+                onRename={async (alias: string) => {
+                  await setDeviceAlias(device.serial, alias);
+                  await loadDevices();
+                }}
               />
             </div>
           ))

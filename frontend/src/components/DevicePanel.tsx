@@ -17,6 +17,9 @@ import {
   ListChecks,
   Square,
   Brain,
+  Zap,
+  Target,
+  Pencil,
 } from 'lucide-react';
 import { throttle } from 'lodash';
 import { ScrcpyPlayer } from './ScrcpyPlayer';
@@ -51,6 +54,15 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useTranslation } from '../lib/i18n-context';
 import {
@@ -80,6 +92,11 @@ interface GlobalConfig {
   base_url: string;
   model_name: string;
   api_key?: string;
+  thinking_mode?: string;
+  dual_model_enabled?: boolean;
+  decision_base_url?: string;
+  decision_model_name?: string;
+  decision_api_key?: string;
 }
 
 interface DevicePanelProps {
@@ -89,6 +106,9 @@ interface DevicePanelProps {
   config: GlobalConfig | null;
   isVisible: boolean;
   isConfigured: boolean;
+  thinkingMode?: 'fast' | 'deep'; // Per-device thinking mode
+  onThinkingModeChange?: (mode: 'fast' | 'deep') => void; // Callback to update thinking mode
+  onRename?: (alias: string) => Promise<void>; // Callback to rename device
 }
 
 export function DevicePanel({
@@ -97,6 +117,9 @@ export function DevicePanel({
   deviceName,
   config,
   isConfigured,
+  thinkingMode = 'fast',
+  onThinkingModeChange,
+  onRename,
 }: DevicePanelProps) {
   const t = useTranslation();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -123,6 +146,8 @@ export function DevicePanel({
   const [dualModelInitialized, setDualModelInitialized] = useState(false);
   const { state: dualModelState, handleEvent: handleDualModelEvent, reset: resetDualModelState } = useDualModelState();
   const feedbackTimeoutRef = useRef<number | null>(null);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
 
   const showFeedback = (
     message: string,
@@ -248,12 +273,13 @@ export function DevicePanel({
     try {
       await initDualModel({
         device_id: deviceId,
-        decision_base_url: 'https://api-inference.modelscope.cn/v1',
-        decision_api_key: 'ms-0f81c6c6-e3a2-4675-9126-ef56bcca4daf',
-        decision_model_name: 'ZhipuAI/GLM-4.7',
+        decision_base_url: config.decision_base_url || 'https://api-inference.modelscope.cn/v1',
+        decision_api_key: config.decision_api_key || '',
+        decision_model_name: config.decision_model_name || 'ZhipuAI/GLM-4.7',
         vision_base_url: config.base_url,
         vision_api_key: config.api_key,
         vision_model_name: config.model_name,
+        thinking_mode: thinkingMode,
       });
       setDualModelInitialized(true);
       setError(null);
@@ -262,7 +288,7 @@ export function DevicePanel({
         err instanceof Error ? err.message : 'Dual model initialization failed';
       setError(errorMessage);
     }
-  }, [deviceId, config]);
+  }, [deviceId, config, thinkingMode]);
 
   // Toggle dual model mode
   const handleToggleDualModel = useCallback(async () => {
@@ -275,6 +301,13 @@ export function DevicePanel({
       setDualModelEnabled(false);
     }
   }, [dualModelEnabled, dualModelInitialized, handleInitDualModel]);
+
+  // Reinitialize dual model when thinking mode changes (while dual model is enabled)
+  useEffect(() => {
+    if (dualModelEnabled && dualModelInitialized) {
+      handleInitDualModel();
+    }
+  }, [thinkingMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-initialize on mount if configured
   useEffect(() => {
@@ -751,7 +784,7 @@ export function DevicePanel({
     setAborting(true);
 
     try {
-      // Close SSE connection
+      // Close SSE connection first
       if (chatStreamRef.current) {
         chatStreamRef.current.close();
         chatStreamRef.current = null;
@@ -761,11 +794,30 @@ export function DevicePanel({
         dualModelStreamRef.current = null;
       }
 
-      // Notify backend to abort
+      // Immediately update UI - set isStreaming to false and update message content
+      setMessages(prev => {
+        const lastMessage = prev[prev.length - 1];
+        if (lastMessage && lastMessage.role === 'agent' && lastMessage.isStreaming) {
+          return prev.map((msg, index) =>
+            index === prev.length - 1
+              ? {
+                  ...msg,
+                  content: msg.content || t.chat.aborted,
+                  isStreaming: false,
+                  success: false,
+                  currentThinking: undefined,
+                }
+              : msg
+          );
+        }
+        return prev;
+      });
+
+      // Notify backend to abort (don't wait for response)
       if (dualModelEnabled) {
-        await abortDualModelChat(deviceId);
+        abortDualModelChat(deviceId).catch(e => console.error('Backend abort failed:', e));
       } else {
-        await abortChat(deviceId);
+        abortChat(deviceId).catch(e => console.error('Backend abort failed:', e));
       }
 
       // Show feedback
@@ -938,10 +990,36 @@ export function DevicePanel({
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#1d9bf0]/10">
               <Sparkles className="h-5 w-5 text-[#1d9bf0]" />
             </div>
-            <div>
-              <h2 className="font-bold text-slate-900 dark:text-slate-100">
-                {deviceName}
-              </h2>
+            <div className="group">
+              <div className="flex items-center gap-1">
+                <h2
+                  className={`font-bold text-slate-900 dark:text-slate-100 ${
+                    onRename ? 'cursor-pointer hover:text-[#1d9bf0] dark:hover:text-[#1d9bf0]' : ''
+                  }`}
+                  onDoubleClick={() => {
+                    if (onRename) {
+                      setRenameValue(deviceName);
+                      setShowRenameDialog(true);
+                    }
+                  }}
+                  title={onRename ? t.deviceCard.doubleClickToRename : undefined}
+                >
+                  {deviceName}
+                </h2>
+                {onRename && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      setRenameValue(deviceName);
+                      setShowRenameDialog(true);
+                    }}
+                    className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-[#1d9bf0]"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </Button>
+                )}
+              </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
                 {deviceId}
               </p>
@@ -1042,10 +1120,42 @@ export function DevicePanel({
                   ? 'bg-purple-500 hover:bg-purple-600 text-white'
                   : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
               }`}
-              title={dualModelEnabled ? 'Disable dual model' : 'Enable dual model (GLM-4.7 + autoglm-phone)'}
+              title={dualModelEnabled ? t.devicePanel.disableDualModel : t.devicePanel.enableDualModel}
             >
               <Brain className="h-4 w-4" />
             </Button>
+
+            {/* Thinking Mode Toggle - visible when dual model is enabled */}
+            {dualModelEnabled && onThinkingModeChange && (
+              <>
+                <Button
+                  variant={thinkingMode === 'fast' ? 'default' : 'ghost'}
+                  size="icon"
+                  onClick={() => onThinkingModeChange('fast')}
+                  className={`h-8 w-8 rounded-full ${
+                    thinkingMode === 'fast'
+                      ? 'bg-green-500 hover:bg-green-600 text-white'
+                      : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
+                  }`}
+                  title={t.devicePanel.fastMode}
+                >
+                  <Zap className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant={thinkingMode === 'deep' ? 'default' : 'ghost'}
+                  size="icon"
+                  onClick={() => onThinkingModeChange('deep')}
+                  className={`h-8 w-8 rounded-full ${
+                    thinkingMode === 'deep'
+                      ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                      : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
+                  }`}
+                  title={t.devicePanel.deepMode}
+                >
+                  <Target className="h-4 w-4" />
+                </Button>
+              </>
+            )}
 
             <Button
               variant="ghost"
@@ -1066,6 +1176,8 @@ export function DevicePanel({
               state={dualModelState}
               isStreaming={loading}
               className=""
+              decisionModelName={config?.decision_model_name || 'ZhipuAI/GLM-4.7'}
+              visionModelName={config?.model_name || 'autoglm-phone'}
             />
           </div>
         )}
@@ -1506,6 +1618,50 @@ export function DevicePanel({
           </div>
         )}
       </Card>
+
+      {/* Rename Dialog */}
+      <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>{t.deviceCard.renameDeviceTitle}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="device-alias-panel">{t.deviceCard.deviceAlias}</Label>
+              <Input
+                id="device-alias-panel"
+                value={renameValue}
+                onChange={e => setRenameValue(e.target.value)}
+                placeholder={deviceName}
+                autoFocus
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && onRename) {
+                    onRename(renameValue).then(() => setShowRenameDialog(false));
+                  }
+                }}
+              />
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t.deviceCard.deviceAliasHint}
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRenameDialog(false)}>
+              {t.common.cancel}
+            </Button>
+            <Button
+              onClick={async () => {
+                if (onRename) {
+                  await onRename(renameValue);
+                  setShowRenameDialog(false);
+                }
+              }}
+            >
+              {t.common.save}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,10 +1,11 @@
 """Device availability checking utilities."""
 
 import asyncio
+from typing import Optional
 
 from AutoGLM_GUI.exceptions import DeviceNotAvailableError
 from AutoGLM_GUI.logger import logger
-from AutoGLM_GUI.platform_utils import run_cmd_silently
+from AutoGLM_GUI.platform_utils import run_cmd_silently, run_cmd_silently_sync
 
 
 async def check_device_available(device_id: str | None = None) -> None:
@@ -48,3 +49,30 @@ async def check_device_available(device_id: str | None = None) -> None:
         raise
     except Exception as e:
         raise DeviceNotAvailableError(f"Failed to check device {device_id}: {e}")
+
+
+def get_device_model(device_id: str, adb_path: str = "adb") -> Optional[str]:
+    """Get device model via adb shell getprop.
+
+    This is used as a fallback when model info is not available from
+    'adb devices -l' output (common for WiFi-connected devices).
+
+    Args:
+        device_id: ADB device serial or IP:port
+        adb_path: Path to adb executable
+
+    Returns:
+        Device model string (e.g., "Redmi K30 Pro") or None if not available
+    """
+    cmd = [adb_path, "-s", device_id, "shell", "getprop", "ro.product.model"]
+
+    try:
+        result = run_cmd_silently_sync(cmd, timeout=5.0)
+        if result.returncode == 0 and result.stdout:
+            model = result.stdout.strip()
+            if model:
+                return model.replace(" ", "_")
+        return None
+    except Exception as e:
+        logger.debug(f"Failed to get model for device {device_id}: {e}")
+        return None

@@ -19,6 +19,7 @@ from AutoGLM_GUI.dual_model import (
     DualModelEvent,
     DualModelEventType,
 )
+from AutoGLM_GUI.dual_model.protocols import ThinkingMode
 from AutoGLM_GUI.state import non_blocking_takeover
 from phone_agent.model import ModelConfig
 
@@ -42,6 +43,9 @@ class DualModelInitRequest(BaseModel):
     vision_base_url: Optional[str] = None
     vision_api_key: Optional[str] = None
     vision_model_name: Optional[str] = None
+
+    # 思考模式: fast 或 deep
+    thinking_mode: str = "deep"
 
     max_steps: int = 50
 
@@ -71,7 +75,8 @@ def init_dual_model(request: DualModelInitRequest) -> dict:
     from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
 
     device_id = request.device_id
-    logger.info(f"初始化双模型Agent: {device_id}")
+    thinking_mode = ThinkingMode.FAST if request.thinking_mode == "fast" else ThinkingMode.DEEP
+    logger.info(f"初始化双模型Agent: {device_id}, 模式: {thinking_mode.value}")
 
     # 检查设备是否已有单模型Agent初始化
     manager = PhoneAgentManager.get_instance()
@@ -97,6 +102,7 @@ def init_dual_model(request: DualModelInitRequest) -> dict:
         base_url=request.decision_base_url,
         api_key=request.decision_api_key,
         model_name=request.decision_model_name,
+        thinking_mode=thinking_mode,
     )
 
     vision_config = ModelConfig(
@@ -112,6 +118,7 @@ def init_dual_model(request: DualModelInitRequest) -> dict:
             vision_config=vision_config,
             device_id=device_id,
             max_steps=request.max_steps,
+            thinking_mode=thinking_mode,
         )
 
         # 存储到活跃会话
@@ -131,6 +138,7 @@ def init_dual_model(request: DualModelInitRequest) -> dict:
             "message": "双模型Agent初始化成功",
             "decision_model": request.decision_model_name,
             "vision_model": vision_model_name,
+            "thinking_mode": thinking_mode.value,
         }
 
     except Exception as e:

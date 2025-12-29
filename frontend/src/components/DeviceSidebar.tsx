@@ -35,6 +35,9 @@ import {
   generateQRPairing,
   getQRPairingStatus,
   cancelQRPairing,
+  setDeviceAlias,
+  deleteDevice,
+  disconnectAllConnections,
 } from '../api';
 import { useTranslation } from '../lib/i18n-context';
 import { useDebouncedState } from '@/hooks/useDebouncedState';
@@ -56,6 +59,7 @@ interface DeviceSidebarProps {
   onOpenConfig: () => void;
   onConnectWifi: (deviceId: string) => void;
   onDisconnectWifi: (deviceId: string) => void;
+  onRefreshDevices?: () => void;
 }
 
 export function DeviceSidebar({
@@ -65,6 +69,7 @@ export function DeviceSidebar({
   onOpenConfig,
   onConnectWifi,
   onDisconnectWifi,
+  onRefreshDevices,
 }: DeviceSidebarProps) {
   const t = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(getInitialCollapsedState);
@@ -530,9 +535,11 @@ export function DeviceSidebar({
               <DeviceCard
                 key={device.id}
                 id={device.id}
+                serial={device.serial}
                 model={device.model}
                 status={device.status}
                 connectionType={device.connection_type}
+                alias={device.alias}
                 agent={device.agent}
                 isActive={currentDeviceId === device.id}
                 onClick={() => onSelectDevice(device.id)}
@@ -541,6 +548,18 @@ export function DeviceSidebar({
                 }}
                 onDisconnectWifi={async () => {
                   await onDisconnectWifi(device.id);
+                }}
+                onDisconnectAll={async () => {
+                  await disconnectAllConnections(device.serial);
+                  if (onRefreshDevices) await onRefreshDevices();
+                }}
+                onRename={async (alias: string) => {
+                  await setDeviceAlias(device.serial, alias);
+                  if (onRefreshDevices) await onRefreshDevices();
+                }}
+                onDelete={async () => {
+                  await deleteDevice(device.serial);
+                  if (onRefreshDevices) await onRefreshDevices();
                 }}
               />
             ))

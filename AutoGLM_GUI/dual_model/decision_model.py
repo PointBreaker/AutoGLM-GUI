@@ -15,7 +15,9 @@ from AutoGLM_GUI.logger import logger
 from .protocols import (
     DecisionModelConfig,
     DECISION_SYSTEM_PROMPT,
+    DECISION_SYSTEM_PROMPT_FAST,
     ModelStage,
+    ThinkingMode,
 )
 
 
@@ -63,8 +65,9 @@ class DecisionModel:
     制定操作决策并指导小模型执行。
     """
 
-    def __init__(self, config: DecisionModelConfig):
+    def __init__(self, config: DecisionModelConfig, thinking_mode: ThinkingMode = ThinkingMode.DEEP):
         self.config = config
+        self.thinking_mode = thinking_mode
         self.client = OpenAI(
             base_url=config.base_url,
             api_key=config.api_key,
@@ -72,7 +75,13 @@ class DecisionModel:
         self.model_name = config.model_name
         self.conversation_history: list[dict] = []
 
-        logger.info(f"决策大模型初始化: {config.model_name}")
+        # 根据模式选择提示词
+        self.system_prompt = (
+            DECISION_SYSTEM_PROMPT_FAST if thinking_mode == ThinkingMode.FAST
+            else DECISION_SYSTEM_PROMPT
+        )
+
+        logger.info(f"决策大模型初始化: {config.model_name}, 模式: {thinking_mode.value}")
 
     def _stream_completion(
         self,
@@ -151,11 +160,11 @@ class DecisionModel:
         Returns:
             TaskPlan: 任务执行计划
         """
-        logger.info(f"分析任务: {task[:50]}...")
+        logger.info(f"分析任务: {task[:50]}... (模式: {self.thinking_mode.value})")
 
-        # 构建消息
+        # 构建消息（使用动态提示词）
         messages = [
-            {"role": "system", "content": DECISION_SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": f"""请分析以下任务，并制定执行计划：
 
 任务: {task}
@@ -195,9 +204,9 @@ class DecisionModel:
                 raw_response=response,
             )
 
-        # 初始化对话历史
+        # 初始化对话历史（使用动态提示词）
         self.conversation_history = [
-            {"role": "system", "content": DECISION_SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": f"任务: {task}"},
             {"role": "assistant", "content": response},
         ]

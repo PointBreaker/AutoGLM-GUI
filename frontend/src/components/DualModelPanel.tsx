@@ -50,12 +50,16 @@ interface DualModelPanelProps {
   state: DualModelState;
   isStreaming: boolean;
   className?: string;
+  decisionModelName?: string;
+  visionModelName?: string;
 }
 
 export function DualModelPanel({
   state,
   isStreaming,
   className = '',
+  decisionModelName = 'Decision Model',
+  visionModelName = 'Vision Model',
 }: DualModelPanelProps) {
   const [expandedSection, setExpandedSection] = React.useState<
     'decision' | 'vision' | null
@@ -151,13 +155,13 @@ export function DualModelPanel({
             <div className="text-left">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                  Decision Model
+                  {decisionModelName}
                 </span>
                 <Badge
                   variant={state.decisionActive ? 'default' : 'secondary'}
                   className="text-[10px] px-1.5 py-0"
                 >
-                  GLM-4.7
+                  决策模型
                 </Badge>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -276,13 +280,13 @@ export function DualModelPanel({
             <div className="text-left">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                  Vision Model
+                  {visionModelName}
                 </span>
                 <Badge
                   variant={state.visionActive ? 'success' : 'secondary'}
                   className="text-[10px] px-1.5 py-0"
                 >
-                  autoglm-phone
+                  视觉模型
                 </Badge>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">

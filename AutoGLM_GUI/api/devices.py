@@ -43,8 +43,14 @@ def _build_device_response_with_agent(
     Returns:
         dict: 完整的设备响应，匹配 DeviceResponse schema
     """
+    from AutoGLM_GUI.device_alias_manager import device_alias_manager
+
     # 获取纯设备信息
     response = device.to_dict()
+
+    # 添加设备别名
+    alias = device_alias_manager.get_alias(device.serial)
+    response["alias"] = alias
 
     # 通过 serial 查找 Agent（支持连接切换）
     agent_device_id = agent_manager.find_agent_by_serial(device.serial)
@@ -370,3 +376,219 @@ def cancel_qr_pairing(session_id: str) -> QRPairCancelResponse:
             success=False,
             message="Session not found or already completed",
         )
+
+
+# ==================== 设备别名管理 ====================
+
+
+@router.get("/api/devices/{serial}/alias")
+def get_device_alias(serial: str) -> dict:
+    """获取设备别名.
+
+    Args:
+        serial: 设备序列号
+
+    Returns:
+        设备别名信息
+    """
+    from AutoGLM_GUI.device_alias_manager import device_alias_manager
+
+    alias = device_alias_manager.get_alias(serial)
+    return {
+        "serial": serial,
+        "alias": alias,
+    }
+
+
+@router.put("/api/devices/{serial}/alias")
+def set_device_alias(serial: str, data: dict) -> dict:
+    """设置设备别名.
+
+    Args:
+        serial: 设备序列号
+        data: 包含 alias 字段的请求体
+
+    Returns:
+        操作结果
+    """
+    from AutoGLM_GUI.device_alias_manager import device_alias_manager
+
+    alias = data.get("alias", "")
+    success = device_alias_manager.set_alias(serial, alias)
+
+    if success:
+        return {
+            "success": True,
+            "serial": serial,
+            "alias": alias if alias.strip() else None,
+            "message": "Alias updated" if alias.strip() else "Alias removed",
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Failed to save alias",
+        }
+
+
+@router.delete("/api/devices/{serial}/alias")
+def delete_device_alias(serial: str) -> dict:
+    """删除设备别名.
+
+    Args:
+        serial: 设备序列号
+
+    Returns:
+        操作结果
+    """
+    from AutoGLM_GUI.device_alias_manager import device_alias_manager
+
+    success = device_alias_manager.delete_alias(serial)
+    return {
+        "success": success,
+        "serial": serial,
+        "message": "Alias deleted" if success else "Failed to delete alias",
+    }
+
+
+# ==================== 设备删除（断开并清理） ====================
+
+
+@router.delete("/api/devices/{serial}")
+def delete_device(serial: str) -> dict:
+    """删除设备（断开连接并清理资源）.
+
+    Args:
+        serial: 设备序列号
+
+    Returns:
+        操作结果
+    """
+    from AutoGLM_GUI.device_manager import DeviceManager
+    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
+    from AutoGLM_GUI.device_alias_manager import device_alias_manager
+
+    device_manager = DeviceManager.get_instance()
+    agent_manager = PhoneAgentManager.get_instance()
+
+    # 获取设备信息
+    device = device_manager.get_device_by_serial(serial)
+    if not device:
+        return {
+            "success": False,
+            "message": f"Device with serial {serial} not found",
+        }
+
+    device_id = device.primary_device_id
+
+    # 清理 Agent
+    agent_device_id = agent_manager.find_agent_by_serial(serial)
+    if agent_device_id:
+        try:
+            agent_manager.remove_agent(agent_device_id)
+            logger.info(f"Removed agent for device {serial}")
+        except Exception as e:
+            logger.warning(f"Failed to remove agent: {e}")
+
+    # 断开 WiFi 连接（如果是 WiFi 设备）
+    conn_type = device.connection_type.value
+    if conn_type == "wifi" or conn_type == "remote":
+        try:
+            device_manager.disconnect_wifi(device_id)
+            logger.info(f"Disconnected WiFi for device {serial}")
+        except Exception as e:
+            logger.warning(f"Failed to disconnect WiFi: {e}")
+
+    # 删除设备别名
+    device_alias_manager.delete_alias(serial)
+
+    # 刷新设备列表
+    device_manager.force_refresh()
+
+    return {
+        "success": True,
+        "serial": serial,
+        "message": f"Device {serial} removed successfully",
+    }
+
+
+# ==================== 断开所有连接 ====================
+
+
+@router.post("/api/devices/{serial}/disconnect_all")
+def disconnect_all_connections(serial: str) -> dict:
+    """断开设备的所有连接（USB和WiFi）.
+
+    Args:
+        serial: 设备序列号
+
+    Returns:
+        操作结果
+    """
+    from AutoGLM_GUI.device_manager import DeviceManager
+    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
+    from AutoGLM_GUI.platform_utils import run_cmd_silently_sync
+    from phone_agent.adb import ADBConnection
+
+    device_manager = DeviceManager.get_instance()
+    agent_manager = PhoneAgentManager.get_instance()
+
+    # 获取设备信息
+    device = device_manager.get_device_by_serial(serial)
+    if not device:
+        return {
+            "success": False,
+            "serial": serial,
+            "message": f"Device with serial {serial} not found",
+        }
+
+    disconnected = []
+
+    # 清理 Agent
+    agent_device_id = agent_manager.find_agent_by_serial(serial)
+    if agent_device_id:
+        try:
+            agent_manager.remove_agent(agent_device_id)
+            logger.info(f"Removed agent for device {serial}")
+            disconnected.append("agent")
+        except Exception as e:
+            logger.warning(f"Failed to remove agent: {e}")
+
+    # 断开 WiFi 连接
+    conn_type = device.connection_type.value
+    if conn_type == "wifi" or conn_type == "remote":
+        try:
+            device_manager.disconnect_wifi(device.primary_device_id)
+            logger.info(f"Disconnected WiFi for device {serial}")
+            disconnected.append("wifi")
+        except Exception as e:
+            logger.warning(f"Failed to disconnect WiFi: {e}")
+
+    # 尝试断开所有与该设备相关的连接（包括可能的 WiFi 连接）
+    try:
+        conn = ADBConnection()
+        # 获取所有设备列表
+        all_devices = device_manager.get_devices()
+        for d in all_devices:
+            if d.serial == serial:
+                # 如果是远程连接，断开
+                d_conn_type = d.connection_type.value
+                if d_conn_type in ("wifi", "remote"):
+                    run_cmd_silently_sync(
+                        [conn.adb_path, "disconnect", d.primary_device_id],
+                        timeout=5
+                    )
+                    logger.info(f"Disconnected connection {d.primary_device_id}")
+                    if "wifi" not in disconnected:
+                        disconnected.append("wifi")
+    except Exception as e:
+        logger.warning(f"Failed to disconnect additional connections: {e}")
+
+    # 刷新设备列表
+    device_manager.force_refresh()
+
+    return {
+        "success": True,
+        "serial": serial,
+        "message": f"Disconnected: {', '.join(disconnected) if disconnected else 'none'}",
+    }
+

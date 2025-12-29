@@ -38,6 +38,13 @@ class ConfigSource(str, Enum):
 # ==================== 类型安全配置模型 ====================
 
 
+class ThinkingMode(str, Enum):
+    """思考模式枚举."""
+
+    FAST = "fast"  # 快速响应模式 - 减少思考时间
+    DEEP = "deep"  # 深度思考模式 - 完整思考过程
+
+
 class ConfigModel(BaseModel):
     """类型安全的配置模型，使用 Pydantic 进行验证."""
 
@@ -50,6 +57,9 @@ class ConfigModel(BaseModel):
     decision_base_url: str = "https://api-inference.modelscope.cn/v1"
     decision_model_name: str = "ZhipuAI/GLM-4.7"
     decision_api_key: str = ""
+
+    # 思考模式配置
+    thinking_mode: str = "deep"  # "fast" 或 "deep"
 
     @field_validator("base_url")
     @classmethod
@@ -75,6 +85,14 @@ class ConfigModel(BaseModel):
             raise ValueError("decision_base_url must start with http:// or https://")
         return v.rstrip("/")  # 去除尾部斜杠
 
+    @field_validator("thinking_mode")
+    @classmethod
+    def validate_thinking_mode(cls, v: str) -> str:
+        """验证思考模式."""
+        if v not in ("fast", "deep"):
+            raise ValueError("thinking_mode must be 'fast' or 'deep'")
+        return v
+
 
 # ==================== 配置层数据类 ====================
 
@@ -91,6 +109,8 @@ class ConfigLayer:
     decision_base_url: Optional[str] = None
     decision_model_name: Optional[str] = None
     decision_api_key: Optional[str] = None
+    # 思考模式配置
+    thinking_mode: Optional[str] = None
 
     source: ConfigSource = ConfigSource.DEFAULT
 
@@ -122,6 +142,7 @@ class ConfigLayer:
                 "decision_base_url": self.decision_base_url,
                 "decision_model_name": self.decision_model_name,
                 "decision_api_key": self.decision_api_key,
+                "thinking_mode": self.thinking_mode,
             }.items()
             if v is not None
         }
@@ -289,6 +310,11 @@ class UnifiedConfigManager:
                 base_url=config_data.get("base_url"),
                 model_name=config_data.get("model_name"),
                 api_key=config_data.get("api_key"),
+                dual_model_enabled=config_data.get("dual_model_enabled"),
+                decision_base_url=config_data.get("decision_base_url"),
+                decision_model_name=config_data.get("decision_model_name"),
+                decision_api_key=config_data.get("decision_api_key"),
+                thinking_mode=config_data.get("thinking_mode"),
                 source=ConfigSource.FILE,
             )
             self._effective_config = None  # 清除缓存
@@ -316,6 +342,11 @@ class UnifiedConfigManager:
         base_url: str,
         model_name: str,
         api_key: Optional[str] = None,
+        dual_model_enabled: Optional[bool] = None,
+        decision_base_url: Optional[str] = None,
+        decision_model_name: Optional[str] = None,
+        decision_api_key: Optional[str] = None,
+        thinking_mode: Optional[str] = None,
         merge_mode: bool = True,
     ) -> bool:
         """
@@ -325,6 +356,11 @@ class UnifiedConfigManager:
             base_url: Base URL
             model_name: 模型名称
             api_key: API key（可选）
+            dual_model_enabled: 是否启用双模型
+            decision_base_url: 决策模型 Base URL
+            decision_model_name: 决策模型名称
+            decision_api_key: 决策模型 API key
+            thinking_mode: 思考模式 (fast/deep)
             merge_mode: 是否合并现有配置（True: 保留未提供的字段）
 
         Returns:
@@ -342,6 +378,16 @@ class UnifiedConfigManager:
 
             if api_key:
                 new_config["api_key"] = api_key
+            if dual_model_enabled is not None:
+                new_config["dual_model_enabled"] = dual_model_enabled
+            if decision_base_url:
+                new_config["decision_base_url"] = decision_base_url
+            if decision_model_name:
+                new_config["decision_model_name"] = decision_model_name
+            if decision_api_key:
+                new_config["decision_api_key"] = decision_api_key
+            if thinking_mode:
+                new_config["thinking_mode"] = thinking_mode
 
             # 合并模式：保留现有文件中未提供的字段
             if merge_mode and self._config_path.exists():
@@ -349,9 +395,14 @@ class UnifiedConfigManager:
                     with open(self._config_path, "r", encoding="utf-8") as f:
                         existing = json.load(f)
 
-                    # 保留 api_key（如果新配置未提供）
-                    if not api_key and "api_key" in existing:
-                        new_config["api_key"] = existing["api_key"]
+                    # 保留未提供的字段
+                    preserve_keys = [
+                        "api_key", "dual_model_enabled", "decision_base_url",
+                        "decision_model_name", "decision_api_key", "thinking_mode"
+                    ]
+                    for key in preserve_keys:
+                        if key not in new_config and key in existing:
+                            new_config[key] = existing[key]
 
                 except (json.JSONDecodeError, Exception) as e:
                     logger.warning(f"Could not merge with existing config: {e}")
@@ -422,7 +473,15 @@ class UnifiedConfigManager:
         # 按优先级合并配置
         merged = {}
 
-        for key in ["base_url", "model_name", "api_key"]:
+        # 所有配置字段
+        config_keys = [
+            "base_url", "model_name", "api_key",
+            "dual_model_enabled", "decision_base_url",
+            "decision_model_name", "decision_api_key",
+            "thinking_mode"
+        ]
+
+        for key in config_keys:
             # 1. CLI 优先
             if self._cli_layer.has_value(key):
                 merged[key] = getattr(self._cli_layer, key)
@@ -432,8 +491,8 @@ class UnifiedConfigManager:
             # 3. 配置文件
             elif self._file_layer.has_value(key):
                 merged[key] = getattr(self._file_layer, key)
-            # 4. 默认值
-            else:
+            # 4. 默认值（只对 base_url, model_name, api_key 有效）
+            elif hasattr(self._default_layer, key) and getattr(self._default_layer, key, None) is not None:
                 merged[key] = getattr(self._default_layer, key)
 
         # 验证并缓存
@@ -579,6 +638,11 @@ class UnifiedConfigManager:
             "base_url": config.base_url,
             "model_name": config.model_name,
             "api_key": config.api_key,
+            "dual_model_enabled": config.dual_model_enabled,
+            "decision_base_url": config.decision_base_url,
+            "decision_model_name": config.decision_model_name,
+            "decision_api_key": config.decision_api_key,
+            "thinking_mode": config.thinking_mode,
         }
 
 

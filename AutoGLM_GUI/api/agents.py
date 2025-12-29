@@ -512,6 +512,11 @@ def get_config_endpoint() -> ConfigResponse:
         model_name=effective_config.model_name,
         api_key=effective_config.api_key if effective_config.api_key != "EMPTY" else "",
         source=source.value,
+        dual_model_enabled=effective_config.dual_model_enabled,
+        decision_base_url=effective_config.decision_base_url,
+        decision_model_name=effective_config.decision_model_name,
+        decision_api_key=effective_config.decision_api_key if effective_config.decision_api_key else "",
+        thinking_mode=effective_config.thinking_mode,
         conflicts=[
             {
                 "field": c.field,
@@ -532,7 +537,7 @@ def save_config_endpoint(request: ConfigSaveRequest) -> dict:
     from AutoGLM_GUI.config_manager import ConfigModel, config_manager
 
     try:
-        # Validate incoming configuration to avoid silently falling back to defaults
+        # Validate incoming configuration
         ConfigModel(
             base_url=request.base_url,
             model_name=request.model_name,
@@ -544,6 +549,11 @@ def save_config_endpoint(request: ConfigSaveRequest) -> dict:
             base_url=request.base_url,
             model_name=request.model_name,
             api_key=request.api_key,
+            dual_model_enabled=request.dual_model_enabled,
+            decision_base_url=request.decision_base_url,
+            decision_model_name=request.decision_model_name,
+            decision_api_key=request.decision_api_key,
+            thinking_mode=request.thinking_mode,
             merge_mode=True,
         )
 
