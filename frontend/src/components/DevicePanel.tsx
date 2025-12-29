@@ -77,7 +77,7 @@ import { HistoryItemCard } from './HistoryItemCard';
 
 interface Message {
   id: string;
-  role: 'user' | 'agent';
+  role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
   steps?: number;
@@ -334,7 +334,7 @@ export function DevicePanel({
     };
     const agentMessage: Message = {
       id: `${item.id}-agent`,
-      role: 'agent',
+      role: 'assistant',
       content: item.finalMessage,
       timestamp: item.endTime,
       steps: item.steps,
@@ -430,7 +430,7 @@ export function DevicePanel({
     const agentMessageId = (Date.now() + 1).toString();
     const agentMessage: Message = {
       id: agentMessageId,
-      role: 'agent',
+      role: 'assistant',
       content: '',
       timestamp: new Date(),
       thinking: [],
@@ -1217,7 +1217,7 @@ export function DevicePanel({
                     message.role === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
-                  {message.role === 'agent' ? (
+                  {message.role === 'assistant' ? (
                     <div className="max-w-[85%] space-y-3">
                       {/* Thinking process */}
                       {message.thinking?.map((think, idx) => (

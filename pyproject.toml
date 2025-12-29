@@ -1,6 +1,6 @@
 [project]
 name = "autoglm-gui"
-version = "1.1.0"
+version = "1.2.1"
 description = "Web GUI for AutoGLM Phone Agent - AI-powered Android automation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,10 +22,12 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.124.0",
+    "fastmcp>=2.0.0",
     "httpx[socks]>=0.28.1",
     "loguru>=0.7.3",
     "openai>=2.9.0",
     "pillow>=11.3.0",
+    "prometheus-client>=0.21.0",
     "python-socketio>=5.11.0",
     "uvicorn[standard]>=0.38.0",
     "zeroconf>=0.148.0",

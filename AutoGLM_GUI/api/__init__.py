@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
 
@@ -10,10 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from AutoGLM_GUI.version import APP_VERSION
 from AutoGLM_GUI.adb_plus.qr_pair import qr_pairing_manager
+from AutoGLM_GUI.version import APP_VERSION
 
-from . import agents, control, devices, dual_model, media, version, workflows
+from . import agents, control, devices, dual_model, mcp, media, metrics, version, workflows
 
 
 def _get_static_dir() -> Path | None:
@@ -42,7 +43,32 @@ def _get_static_dir() -> Path | None:
 
 def create_app() -> FastAPI:
     """Build the FastAPI app with routers and static assets."""
-    app = FastAPI(title="AutoGLM-GUI API", version=APP_VERSION)
+
+    # Create MCP ASGI app
+    mcp_app = mcp.get_mcp_asgi_app()
+
+    # Define combined lifespan
+    @asynccontextmanager
+    async def combined_lifespan(app: FastAPI):
+        """Combine app startup logic with MCP lifespan."""
+        # App startup
+        asyncio.create_task(qr_pairing_manager.cleanup_expired_sessions())
+
+        from AutoGLM_GUI.device_manager import DeviceManager
+
+        device_manager = DeviceManager.get_instance()
+        device_manager.start_polling()
+
+        # Run MCP lifespan
+        async with mcp_app.lifespan(app):
+            yield
+
+        # App shutdown (if needed in the future)
+
+    # Create FastAPI app with combined lifespan
+    app = FastAPI(
+        title="AutoGLM-GUI API", version=APP_VERSION, lifespan=combined_lifespan
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -56,21 +82,13 @@ def create_app() -> FastAPI:
     app.include_router(devices.router)
     app.include_router(control.router)
     app.include_router(media.router)
+    app.include_router(metrics.router)
     app.include_router(version.router)
     app.include_router(workflows.router)
     app.include_router(dual_model.router)
 
-    @app.on_event("startup")
-    async def startup_event():
-        """Initialize background tasks on server startup."""
-        # Start QR pairing session cleanup task
-        asyncio.create_task(qr_pairing_manager.cleanup_expired_sessions())
-
-        # Start device polling
-        from AutoGLM_GUI.device_manager import DeviceManager
-
-        device_manager = DeviceManager.get_instance()
-        device_manager.start_polling()
+    # Mount MCP server at root (mcp_app already has /mcp path prefix)
+    app.mount("/", mcp_app)
 
     static_dir = _get_static_dir()
     if static_dir is not None and static_dir.exists():
@@ -78,12 +96,17 @@ def create_app() -> FastAPI:
         if assets_dir.exists():
             app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-        @app.get("/{full_path:path}")
+        # Define SPA serving function
         async def serve_spa(full_path: str) -> FileResponse:
             file_path = static_dir / full_path
             if file_path.is_file():
                 return FileResponse(file_path)
             return FileResponse(static_dir / "index.html")
+
+        # Add catch-all route AFTER all mounts to ensure lower priority
+        app.add_api_route(
+            "/{full_path:path}", serve_spa, methods=["GET"], include_in_schema=False
+        )
 
     return app
 
