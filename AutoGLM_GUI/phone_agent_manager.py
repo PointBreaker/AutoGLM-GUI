@@ -44,6 +44,15 @@ class AgentMetadata:
     error_message: Optional[str] = None
 
 
+@dataclass
+class StreamingAgentContext:
+    """Streaming agent 会话上下文."""
+
+    streaming_agent: "PhoneAgent"
+    original_agent: "PhoneAgent"
+    stop_event: threading.Event
+
+
 class PhoneAgentManager:
     """
     Singleton manager for PhoneAgent lifecycle and concurrency control.
@@ -90,6 +99,13 @@ class PhoneAgentManager:
 
         # State tracking
         self._states: dict[str, AgentState] = {}
+
+        # Streaming agent state (device_id -> StreamingAgentContext)
+        self._streaming_contexts: dict[str, StreamingAgentContext] = {}
+        self._streaming_contexts_lock = threading.Lock()
+
+        # Abort events (device_id -> threading.Event)
+        self._abort_events: dict[str, threading.Event] = {}
 
     @classmethod
     def get_instance(cls) -> PhoneAgentManager:
@@ -189,6 +205,137 @@ class PhoneAgentManager:
                 raise AgentInitializationError(
                     f"Failed to initialize agent: {str(e)}"
                 ) from e
+
+    def _create_streaming_agent(
+        self,
+        model_config: "ModelConfig",
+        agent_config: "AgentConfig",
+        on_thinking_chunk: Callable[[str], None],
+    ) -> "PhoneAgent":
+        """
+        创建支持流式输出的 PhoneAgent（monkey-patched model_client）.
+
+        Args:
+            model_config: 模型配置
+            agent_config: Agent 配置
+            on_thinking_chunk: 思考块回调函数
+
+        Returns:
+            已 patch 的 PhoneAgent 实例
+        """
+        from phone_agent import PhoneAgent
+
+        from AutoGLM_GUI.state import non_blocking_takeover
+
+        # 创建 agent
+        agent = PhoneAgent(
+            model_config=model_config,
+            agent_config=agent_config,
+            takeover_callback=non_blocking_takeover,
+        )
+
+        # Monkey-patch model_client.request 以支持流式回调
+        original_request = agent.model_client.request
+
+        def patched_request(messages, **kwargs):
+            return original_request(messages, on_thinking_chunk=on_thinking_chunk)
+
+        agent.model_client.request = patched_request
+
+        return agent
+
+    @contextmanager
+    def use_streaming_agent(
+        self,
+        device_id: str,
+        on_thinking_chunk: Callable[[str], None],
+        timeout: Optional[float] = None,
+    ):
+        """
+        Context manager for streaming-enabled agent with automatic:
+        - 设备锁获取/释放
+        - Streaming agent 创建（带 monkey-patch）
+        - 上下文隔离和同步
+        - Abort 事件注册/清理
+
+        Args:
+            device_id: 设备标识符
+            on_thinking_chunk: 流式思考块回调函数
+            timeout: 锁获取超时时间（None=阻塞，0=非阻塞）
+
+        Yields:
+            tuple[PhoneAgent, threading.Event]: (streaming_agent, stop_event)
+
+        Raises:
+            DeviceBusyError: 设备忙
+            AgentNotInitializedError: Agent 未初始化
+
+        Example:
+            >>> def on_chunk(chunk: str):
+            >>>     print(chunk, end='', flush=True)
+            >>>
+            >>> with manager.use_streaming_agent("device_123", on_chunk) as (agent, stop_event):
+            >>>     result = agent.step("Open WeChat")
+        """
+        acquired = False
+        streaming_agent = None
+        stop_event = threading.Event()
+
+        try:
+            # 获取设备锁（默认非阻塞）
+            acquired = self.acquire_device(
+                device_id,
+                timeout=timeout if timeout is not None else 0,
+                raise_on_timeout=True,
+            )
+
+            # 获取原始 agent 和配置
+            original_agent = self.get_agent(device_id)
+            model_config, agent_config = self.get_config(device_id)
+
+            # 创建 streaming agent
+            streaming_agent = self._create_streaming_agent(
+                model_config=model_config,
+                agent_config=agent_config,
+                on_thinking_chunk=on_thinking_chunk,
+            )
+
+            # 复制上下文（由于持有设备锁，线程安全）
+            streaming_agent._context = original_agent._context.copy()
+            streaming_agent._step_count = original_agent._step_count
+
+            # 注册 abort 事件
+            with self._streaming_contexts_lock:
+                self._abort_events[device_id] = stop_event
+                self._streaming_contexts[device_id] = StreamingAgentContext(
+                    streaming_agent=streaming_agent,
+                    original_agent=original_agent,
+                    stop_event=stop_event,
+                )
+
+            logger.debug(f"Streaming agent created for {device_id}")
+
+            yield streaming_agent, stop_event
+
+        finally:
+            # 同步状态回原始 agent
+            if streaming_agent and not stop_event.is_set():
+                original_agent = self.get_agent_safe(device_id)
+                if original_agent:
+                    original_agent._context = streaming_agent._context
+                    original_agent._step_count = streaming_agent._step_count
+                    logger.debug(
+                        f"Synchronized context back to original agent for {device_id}"
+                    )
+
+            # 清理 abort 事件注册
+            with self._streaming_contexts_lock:
+                self._abort_events.pop(device_id, None)
+                self._streaming_contexts.pop(device_id, None)
+
+            # 释放设备锁
+            if acquired:
+                self.release_device(device_id)
 
     def get_agent(self, device_id: str) -> PhoneAgent:
         """
@@ -547,3 +694,27 @@ class PhoneAgentManager:
         """Get agent metadata."""
         with self._manager_lock:
             return self._metadata.get(device_id)
+
+    def abort_streaming_chat(self, device_id: str) -> bool:
+        """
+        中止正在进行的流式对话.
+
+        Args:
+            device_id: 设备标识符
+
+        Returns:
+            bool: True 表示发送了中止信号，False 表示没有活跃会话
+        """
+        with self._streaming_contexts_lock:
+            if device_id in self._abort_events:
+                logger.info(f"Aborting streaming chat for device {device_id}")
+                self._abort_events[device_id].set()
+                return True
+            else:
+                logger.warning(f"No active streaming chat for device {device_id}")
+                return False
+
+    def is_streaming_active(self, device_id: str) -> bool:
+        """检查设备是否有活跃的流式会话."""
+        with self._streaming_contexts_lock:
+            return device_id in self._abort_events

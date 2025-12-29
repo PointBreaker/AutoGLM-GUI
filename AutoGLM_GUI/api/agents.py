@@ -28,7 +28,6 @@ from AutoGLM_GUI.state import (
     non_blocking_takeover,
 )
 from AutoGLM_GUI.version import APP_VERSION
-from phone_agent import PhoneAgent
 from phone_agent.agent import AgentConfig
 from phone_agent.model import ModelConfig
 
@@ -36,24 +35,6 @@ from phone_agent.model import ModelConfig
 apply_patches()
 
 router = APIRouter()
-
-# Active chat sessions (device_id -> stop_event)
-# Used for aborting ongoing conversations
-_active_chats: dict[str, threading.Event] = {}
-_active_chats_lock = threading.Lock()
-
-
-def _release_device_lock_when_done(
-    device_id: str, threads: list[threading.Thread]
-) -> None:
-    """Block until threads finish, then release the device lock via manager."""
-    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
-
-    for thread in threads:
-        thread.join()
-
-    manager = PhoneAgentManager.get_instance()
-    manager.release_device(device_id)
 
 
 @router.post("/api/init")
@@ -175,119 +156,59 @@ def chat(request: ChatRequest) -> ChatResponse:
 @router.post("/api/chat/stream")
 def chat_stream(request: ChatRequest):
     """发送任务给 Agent 并实时推送执行进度（SSE，多设备支持）。"""
-    from AutoGLM_GUI.exceptions import AgentNotInitializedError, DeviceBusyError
+    from AutoGLM_GUI.exceptions import DeviceBusyError
     from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
 
     device_id = request.device_id
     manager = PhoneAgentManager.get_instance()
 
-    # Check if agent is initialized
+    # 验证 agent 已初始化
     if not manager.is_initialized(device_id):
         raise HTTPException(
             status_code=400,
             detail=f"Device {device_id} not initialized. Call /api/init first.",
         )
 
-    # Acquire device lock (non-blocking) to prevent concurrent requests
-    try:
-        manager.acquire_device(device_id, timeout=0, raise_on_timeout=True)
-    except DeviceBusyError:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Device {device_id} is already processing a request. Please wait.",
-        )
+    def event_generator():
+        """SSE 事件生成器."""
+        threads: list[threading.Thread] = []
 
-    try:
-        # Get the original agent to copy its config
-        original_agent = manager.get_agent(device_id)
-
-        # Get the stored configs for this device
         try:
-            model_config, agent_config = manager.get_config(device_id)
-        except AgentNotInitializedError:
-            manager.release_device(device_id)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Device {device_id} config not found.",
-            )
+            # 创建事件队列用于 agent → SSE 通信
+            event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
 
-        def event_generator():
-            """SSE 事件生成器"""
-            threads: list[threading.Thread] = []
-            stop_event = threading.Event()
+            # 思考块回调
+            def on_thinking_chunk(chunk: str):
+                chunk_data = {"type": "thinking_chunk", "chunk": chunk}
+                event_queue.put(("thinking_chunk", chunk_data))
 
-            # Register stop_event to global mapping for abort support
-            with _active_chats_lock:
-                _active_chats[device_id] = stop_event
-
-            try:
-                # Create a queue to collect events from the agent
-                event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
-
-                # Create a callback to handle thinking chunks
-                def on_thinking_chunk(chunk: str):
-                    """Emit thinking chunks as they arrive"""
-                    if not stop_event.is_set():
-                        chunk_data = {
-                            "type": "thinking_chunk",
-                            "chunk": chunk,
-                        }
-                        event_queue.put(("thinking_chunk", chunk_data))
-
-                # Create a new agent instance
-                streaming_agent = PhoneAgent(
-                    model_config=model_config,
-                    agent_config=agent_config,
-                    takeover_callback=non_blocking_takeover,
-                )
-
-                # Copy context from original agent (thread-safe due to device lock)
-                streaming_agent._context = original_agent._context.copy()
-                streaming_agent._step_count = original_agent._step_count
-
-                # Monkey-patch the model_client.request to inject the callback
-                original_request = streaming_agent.model_client.request
-
-                def patched_request(messages, **kwargs):
-                    # Inject the on_thinking_chunk callback
-                    return original_request(
-                        messages, on_thinking_chunk=on_thinking_chunk
-                    )
-
-                streaming_agent.model_client.request = patched_request
-
-                # Early abort check (before starting any steps)
+            # 使用 streaming agent context manager（自动处理所有管理逻辑！）
+            with manager.use_streaming_agent(
+                device_id, on_thinking_chunk, timeout=0
+            ) as (streaming_agent, stop_event):
+                # 早期 abort 检查
                 if stop_event.is_set():
-                    logger.info(
-                        f"[Abort] Agent for device {device_id} received abort signal before starting steps"
-                    )
+                    logger.info(f"[Abort] Chat aborted before starting for {device_id}")
                     yield "event: aborted\n"
                     yield 'data: {"type": "aborted", "message": "Chat aborted by user"}\n\n'
                     return
 
-                # Run agent step in a separate thread
+                # 在线程中运行 agent 步骤
                 step_result: list[Any] = [None]
                 error_result: list[Any] = [None]
 
                 def run_step(is_first: bool = True, task: str | None = None):
                     try:
-                        # Check before starting step
                         if stop_event.is_set():
-                            logger.info(
-                                f"[Abort] Agent for device {device_id} received abort signal before step execution"
-                            )
                             return
 
-                        if is_first:
-                            result = streaming_agent.step(task)
-                        else:
-                            result = streaming_agent.step()
+                        result = (
+                            streaming_agent.step(task)
+                            if is_first
+                            else streaming_agent.step()
+                        )
 
-                        # Check after step completes
                         if stop_event.is_set():
-                            logger.info(
-                                f"[Abort] Agent for device {device_id} received abort signal after step execution"
-                            )
                             return
 
                         step_result[0] = result
@@ -296,21 +217,18 @@ def chat_stream(request: ChatRequest):
                     finally:
                         event_queue.put(("step_done", None))
 
-                # Start first step
+                # 启动第一步
                 thread = threading.Thread(
                     target=run_step, args=(True, request.message), daemon=True
                 )
                 thread.start()
                 threads.append(thread)
 
+                # 事件循环
                 while not stop_event.is_set():
-                    # Wait for events from the queue
                     try:
                         event_type, event_data = event_queue.get(timeout=0.1)
                     except queue.Empty:
-                        # Check again on timeout
-                        if stop_event.is_set():
-                            break
                         continue
 
                     if event_type == "thinking_chunk":
@@ -318,7 +236,6 @@ def chat_stream(request: ChatRequest):
                         yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
 
                     elif event_type == "step_done":
-                        # Check for errors
                         if error_result[0]:
                             raise error_result[0]
 
@@ -360,7 +277,7 @@ def chat_stream(request: ChatRequest):
                             yield f"data: {json.dumps(done_data, ensure_ascii=False)}\n\n"
                             break
 
-                        # Start next step
+                        # 启动下一步
                         step_result[0] = None
                         error_result[0] = None
                         thread = threading.Thread(
@@ -369,61 +286,44 @@ def chat_stream(request: ChatRequest):
                         thread.start()
                         threads.append(thread)
 
-                # Check if loop exited due to abort
+                # 检查是否被中止
                 if stop_event.is_set():
-                    logger.info(
-                        f"[Abort] Agent for device {device_id} event loop terminated due to abort signal"
-                    )
+                    logger.info(f"[Abort] Streaming chat terminated for {device_id}")
                     yield "event: aborted\n"
                     yield 'data: {"type": "aborted", "message": "Chat aborted by user"}\n\n'
 
-                # Update original agent state (thread-safe due to device lock)
-                original_agent._context = streaming_agent._context
-                original_agent._step_count = streaming_agent._step_count
-
+                # 重置原始 agent（context 已由 use_streaming_agent 同步）
+                original_agent = manager.get_agent(device_id)
                 original_agent.reset()
 
-            except Exception as e:
-                error_data = {
-                    "type": "error",
-                    "message": str(e),
-                }
-                yield "event: error\n"
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
-            finally:
-                # Clean up active chats mapping
-                with _active_chats_lock:
-                    _active_chats.pop(device_id, None)
-
-                # Signal all threads to stop
+        except DeviceBusyError:
+            error_data = {"type": "error", "message": "Device is busy"}
+            yield "event: error\n"
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.exception(f"Error in streaming chat for {device_id}")
+            error_data = {"type": "error", "message": str(e)}
+            yield "event: error\n"
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+        finally:
+            # 通知线程停止
+            if "stop_event" in locals():
                 stop_event.set()
 
-                alive_threads = [thread for thread in threads if thread.is_alive()]
-                if alive_threads:
-                    # Release lock after background threads complete
-                    cleanup_thread = threading.Thread(
-                        target=_release_device_lock_when_done,
-                        args=(device_id, alive_threads),
-                        daemon=True,
-                    )
-                    cleanup_thread.start()
-                else:
-                    # Release lock immediately if no threads are alive
-                    manager.release_device(device_id)
+            # 等待线程完成（带超时）
+            for thread in threads:
+                if thread.is_alive():
+                    thread.join(timeout=5.0)
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-    except Exception:
-        # Release lock if exception occurs before generator starts
-        manager.release_device(device_id)
-        raise
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/api/status", response_model=StatusResponse)
@@ -478,18 +378,17 @@ def reset_agent(request: ResetRequest) -> dict:
 @router.post("/api/chat/abort")
 def abort_chat(request: AbortRequest) -> dict:
     """中断正在进行的对话流。"""
-    from AutoGLM_GUI.logger import logger
+    from AutoGLM_GUI.phone_agent_manager import PhoneAgentManager
 
     device_id = request.device_id
+    manager = PhoneAgentManager.get_instance()
 
-    with _active_chats_lock:
-        if device_id in _active_chats:
-            logger.info(f"Aborting chat for device {device_id}")
-            _active_chats[device_id].set()  # 设置中断标志
-            return {"success": True, "message": "Abort requested"}
-        else:
-            logger.warning(f"No active chat found for device {device_id}")
-            return {"success": False, "message": "No active chat found"}
+    success = manager.abort_streaming_chat(device_id)
+
+    return {
+        "success": success,
+        "message": "Abort requested" if success else "No active chat found",
+    }
 
 
 @router.get("/api/config", response_model=ConfigResponse)
