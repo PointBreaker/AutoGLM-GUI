@@ -35,8 +35,6 @@ import {
   generateQRPairing,
   getQRPairingStatus,
   cancelQRPairing,
-  deleteDevice,
-  disconnectAllConnections,
 } from '../api';
 import { useTranslation } from '../lib/i18n-context';
 import { useDebouncedState } from '@/hooks/useDebouncedState';
@@ -58,7 +56,6 @@ interface DeviceSidebarProps {
   onOpenConfig: () => void;
   onConnectWifi: (deviceId: string) => void;
   onDisconnectWifi: (deviceId: string) => void;
-  onRefreshDevices?: () => void;
 }
 
 export function DeviceSidebar({
@@ -68,7 +65,6 @@ export function DeviceSidebar({
   onOpenConfig,
   onConnectWifi,
   onDisconnectWifi,
-  onRefreshDevices,
 }: DeviceSidebarProps) {
   const t = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(getInitialCollapsedState);
@@ -546,14 +542,6 @@ export function DeviceSidebar({
                 }}
                 onDisconnectWifi={async () => {
                   await onDisconnectWifi(device.id);
-                }}
-                onDisconnectAll={async () => {
-                  await disconnectAllConnections(device.serial);
-                  if (onRefreshDevices) await onRefreshDevices();
-                }}
-                onDelete={async () => {
-                  await deleteDevice(device.serial);
-                  if (onRefreshDevices) await onRefreshDevices();
                 }}
               />
             ))

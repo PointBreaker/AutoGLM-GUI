@@ -7,8 +7,6 @@ import {
   Loader2,
   XCircle,
   Clock,
-  Trash2,
-  Unplug,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -27,8 +25,6 @@ interface DeviceCardProps {
   onClick: () => void;
   onConnectWifi?: () => Promise<void>;
   onDisconnectWifi?: () => Promise<void>;
-  onDisconnectAll?: () => Promise<void>;
-  onDelete?: () => Promise<void>;
 }
 
 export function DeviceCard({
@@ -42,8 +38,6 @@ export function DeviceCard({
   onClick,
   onConnectWifi,
   onDisconnectWifi,
-  onDisconnectAll,
-  onDelete,
 }: DeviceCardProps) {
   const t = useTranslation();
   const isOnline = status === 'device';
@@ -52,9 +46,6 @@ export function DeviceCard({
   const [loading, setLoading] = useState(false);
   const [showWifiConfirm, setShowWifiConfirm] = useState(false);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
-  const [showDisconnectAllConfirm, setShowDisconnectAllConfirm] =
-    useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const displayName = model || t.deviceCard.unknownDevice;
 
@@ -68,18 +59,6 @@ export function DeviceCard({
     e.stopPropagation();
     if (loading || !onDisconnectWifi) return;
     setShowDisconnectConfirm(true);
-  };
-
-  const handleDisconnectAllClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (loading || !onDisconnectAll) return;
-    setShowDisconnectAllConfirm(true);
-  };
-
-  const handleDeleteClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (loading || !onDelete) return;
-    setShowDeleteConfirm(true);
   };
 
   const handleConfirmWifi = async () => {
@@ -100,30 +79,6 @@ export function DeviceCard({
     try {
       if (onDisconnectWifi) {
         await onDisconnectWifi();
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleConfirmDisconnectAll = async () => {
-    setShowDisconnectAllConfirm(false);
-    setLoading(true);
-    try {
-      if (onDisconnectAll) {
-        await onDisconnectAll();
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleConfirmDelete = async () => {
-    setShowDeleteConfirm(false);
-    setLoading(true);
-    try {
-      if (onDelete) {
-        await onDelete();
       }
     } finally {
       setLoading(false);
@@ -292,38 +247,6 @@ export function DeviceCard({
                 )}
               </Button>
             )}
-            {onDisconnectAll && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleDisconnectAllClick}
-                disabled={loading}
-                className="h-7 w-7 text-slate-400 hover:text-orange-500"
-                title={t.deviceCard.disconnectAll}
-              >
-                {loading ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Unplug className="w-3.5 h-3.5" />
-                )}
-              </Button>
-            )}
-            {onDelete && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleDeleteClick}
-                disabled={loading}
-                className="h-7 w-7 text-slate-400 hover:text-red-500"
-                title={t.deviceCard.deleteDevice}
-              >
-                {loading ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="w-3.5 h-3.5" />
-                )}
-              </Button>
-            )}
           </div>
         </div>
       </div>
@@ -344,24 +267,6 @@ export function DeviceCard({
         content={t.deviceCard.disconnectWifiContent}
         onConfirm={handleConfirmDisconnect}
         onCancel={() => setShowDisconnectConfirm(false)}
-      />
-
-      {/* Disconnect All Confirmation Dialog */}
-      <ConfirmDialog
-        isOpen={showDisconnectAllConfirm}
-        title={t.deviceCard.disconnectAllTitle}
-        content={t.deviceCard.disconnectAllContent}
-        onConfirm={handleConfirmDisconnectAll}
-        onCancel={() => setShowDisconnectAllConfirm(false)}
-      />
-
-      {/* Delete Device Confirmation Dialog */}
-      <ConfirmDialog
-        isOpen={showDeleteConfirm}
-        title={t.deviceCard.deleteDeviceTitle}
-        content={t.deviceCard.deleteDeviceContent}
-        onConfirm={handleConfirmDelete}
-        onCancel={() => setShowDeleteConfirm(false)}
       />
     </>
   );

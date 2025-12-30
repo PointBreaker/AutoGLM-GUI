@@ -959,23 +959,3 @@ export async function resetDualModel(deviceId: string): Promise<{
   const res = await axios.post('/api/dual/reset', { device_id: deviceId });
   return res.data;
 }
-
-// ==================== 设备删除 ====================
-
-export async function deleteDevice(
-  serial: string
-): Promise<{ success: boolean; serial: string; message: string }> {
-  const res = await axios.delete(`/api/devices/${encodeURIComponent(serial)}`);
-  return res.data;
-}
-
-// ==================== 断开所有连接 ====================
-
-export async function disconnectAllConnections(
-  serial: string
-): Promise<{ success: boolean; serial: string; message: string }> {
-  const res = await axios.post(
-    `/api/devices/${encodeURIComponent(serial)}/disconnect_all`
-  );
-  return res.data;
-}
