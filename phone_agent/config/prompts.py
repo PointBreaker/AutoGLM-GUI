@@ -3,7 +3,12 @@
 from datetime import datetime
 
 today = datetime.today()
-formatted_date = today.strftime("%Y年%m月%d日")
+# NOTE: Do NOT use strftime with Chinese characters in format string!
+# On some Windows systems with non-UTF-8 locale (e.g., GBK/CP936),
+# strftime("%Y年%m月%d日") raises UnicodeEncodeError because the C library's
+# strftime uses locale encoding, not Python's UTF-8 mode.
+# Use f-string instead to avoid this issue completely.
+formatted_date = f"{today.year}年{today.month:02d}月{today.day:02d}日"
 
 SYSTEM_PROMPT = (
     "今天的日期是: "
