@@ -266,5 +266,7 @@ export const en = {
     dualModeDesc: 'Decision model guides step-by-step, vision model executes',
     layeredModeDesc:
       'Planner decomposes tasks, executor handles subtasks independently',
+    maiUIModeDesc:
+      'Alibaba Cloud MAI-UI model, open-source high-performance GUI Agent',
   },
 };

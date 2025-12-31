@@ -75,7 +75,7 @@ def download_adb(platform: str, force: bool = False) -> None:
         print(f"\n{'=' * 60}")
         print(f"ADB 工具 - {platform}")
         print(f"{'=' * 60}")
-        print(f"  ✓ ADB 已存在，跳过下载")
+        print("  ✓ ADB 已存在，跳过下载")
         print(f"  位置: {output_dir / 'platform-tools'}")
         return
 

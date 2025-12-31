@@ -257,5 +257,6 @@ export const zh = {
     classicModeDesc: '视觉模型直接执行任务',
     dualModeDesc: '决策模型逐步指导，视觉模型执行，精细控制',
     layeredModeDesc: '规划层分解任务，执行层独立完成子任务',
+    maiUIModeDesc: '阿里云 MAI-UI 模型，开源高性能 GUI Agent',
   },
 };

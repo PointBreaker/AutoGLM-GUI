@@ -165,6 +165,32 @@ function getLogFilePath() {
   }
 }
 
+/**
+ * 获取当天的实际日志文件路径
+ * @returns {string} 实际日志文件路径
+ */
+function getActualLogFilePath() {
+  const templatePath = getLogFilePath();
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  return templatePath.replace('{time:YYYY-MM-DD}', dateStr);
+}
+
+/**
+ * 打印后端日志位置信息到控制台
+ */
+function printLogLocation() {
+  const isDev = process.argv.includes('--dev') || !app.isPackaged;
+  const logPath = getActualLogFilePath();
+  const logDir = path.dirname(logPath);
+  
+  console.log('\n========== 后端日志位置 ==========');
+  console.log(`模式: ${isDev ? '开发模式' : '生产模式'}`);
+  console.log(`日志目录: ${logDir}`);
+  console.log(`日志文件: ${logPath}`);
+  console.log('====================================\n');
+}
+
 // ==================== 后端管理 ====================
 
 /**
@@ -476,6 +502,9 @@ app.whenReady().then(async () => {
 
     // 3. 等待后端就绪
     await waitForBackend(backendPort);
+
+    // 打印后端日志位置
+    printLogLocation();
 
     // 4. 创建主窗口
     createWindow();
