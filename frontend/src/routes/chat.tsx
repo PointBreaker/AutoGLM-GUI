@@ -7,6 +7,7 @@ import {
   listDevices,
   getConfig,
   saveConfig,
+  getErrorMessage,
   type Device,
   type ConfigSaveRequest,
 } from '../api';
@@ -336,10 +337,7 @@ function ChatComponent() {
       showToast(t.toasts.configSaved, 'success');
     } catch (err) {
       console.error('Failed to save config:', err);
-      showToast(
-        `Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`,
-        'error'
-      );
+      showToast(`Failed to save: ${getErrorMessage(err)}`, 'error');
     }
   };
 
@@ -781,10 +779,7 @@ function ChatComponent() {
                   onClick={() => {
                     setChatMode('dual');
                     if (!config?.decision_api_key) {
-                      showToast(
-                        t.toasts.decisionModelNotConfigured,
-                        'warning'
-                      );
+                      showToast(t.toasts.decisionModelNotConfigured, 'warning');
                     }
                   }}
                   className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all ${
@@ -815,10 +810,7 @@ function ChatComponent() {
                   onClick={() => {
                     setChatMode('chatkit');
                     if (!config?.decision_api_key) {
-                      showToast(
-                        t.toasts.decisionModelNotConfigured,
-                        'warning'
-                      );
+                      showToast(t.toasts.decisionModelNotConfigured, 'warning');
                     }
                   }}
                   className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all ${

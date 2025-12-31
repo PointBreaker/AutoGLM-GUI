@@ -29,7 +29,7 @@ import {
   Square,
 } from 'lucide-react';
 import type { ScreenshotResponse, Workflow } from '../api';
-import { getScreenshot, listWorkflows } from '../api';
+import { getScreenshot, listWorkflows, getErrorMessage } from '../api';
 import {
   Popover,
   PopoverContent,
@@ -370,7 +370,16 @@ export function ChatKitPanel({
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let errorDetail = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorDetail = errorData.detail;
+          }
+        } catch {
+          // 如果无法解析响应体，使用默认的状态码错误
+        }
+        throw new Error(errorDetail);
       }
 
       const reader = response.body?.getReader();
@@ -531,7 +540,7 @@ export function ChatKitPanel({
       }
 
       console.error('Chat error:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      const errorMessage = getErrorMessage(err);
       setError(errorMessage);
       setMessages(prev =>
         prev.map(msg =>

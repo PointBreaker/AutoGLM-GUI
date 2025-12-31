@@ -1,5 +1,41 @@
 import axios from 'redaxios';
 
+/**
+ * 从 axios/redaxios 错误中提取详细的错误信息
+ * 优先返回后端 FastAPI HTTPException 的 detail 字段
+ */
+export function getErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object') {
+    // redaxios 错误格式: { data: { detail: string }, status: number }
+    const axiosError = error as {
+      data?: { detail?: string };
+      status?: number;
+      message?: string;
+    };
+
+    // 优先使用后端返回的 detail 字段
+    if (axiosError.data?.detail) {
+      return axiosError.data.detail;
+    }
+
+    // 其次使用 message 字段
+    if (axiosError.message) {
+      return axiosError.message;
+    }
+
+    // 如果有状态码，返回状态码信息
+    if (axiosError.status) {
+      return `HTTP error! status: ${axiosError.status}`;
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown error';
+}
+
 export interface AgentStatus {
   state: 'idle' | 'busy' | 'error' | 'initializing';
   created_at: number;
@@ -320,7 +356,16 @@ export function sendMessageStream(
   })
     .then(async response => {
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let errorDetail = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorDetail = errorData.detail;
+          }
+        } catch {
+          // 如果无法解析响应体，使用默认的状态码错误
+        }
+        throw new Error(errorDetail);
       }
 
       if (!response.body) {
@@ -884,7 +929,16 @@ export function sendDualModelStream(
   })
     .then(async response => {
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let errorDetail = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorDetail = errorData.detail;
+          }
+        } catch {
+          // 如果无法解析响应体，使用默认的状态码错误
+        }
+        throw new Error(errorDetail);
       }
 
       if (!response.body) {

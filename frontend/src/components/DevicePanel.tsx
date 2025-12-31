@@ -43,6 +43,7 @@ import {
   initDualModel,
   sendDualModelStream,
   abortDualModelChat,
+  getErrorMessage,
   resetDualModel,
 } from '../api';
 import { Button } from '@/components/ui/button';
@@ -257,8 +258,7 @@ export function DevicePanel({
       setInitialized(true);
       setError(null);
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : 'Initialization failed';
+      const errorMessage = getErrorMessage(err);
       setError(errorMessage);
     }
   }, [deviceId, config]);
@@ -281,8 +281,7 @@ export function DevicePanel({
       setDualModelInitialized(true);
       setError(null);
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : 'Dual model initialization failed';
+      const errorMessage = getErrorMessage(err);
       setError(errorMessage);
     }
   }, [deviceId, config, thinkingMode]);
