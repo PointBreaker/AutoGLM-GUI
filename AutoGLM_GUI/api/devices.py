@@ -47,6 +47,7 @@ def _build_device_response_with_agent(
     API 层负责协调 DeviceManager 和 PhoneAgentManager，
     通过遍历设备的所有连接来查找已初始化的 Agent。
     """
+
     response = device.to_dict()
 
     # 遍历设备的所有连接，查找已初始化的 Agent
@@ -63,6 +64,7 @@ def _build_device_response_with_agent(
                 "error_message": metadata.error_message,
                 "model_name": metadata.model_config.model_name,
             }
+
             break  # 找到第一个 Agent 即可退出
     else:
         # 没有找到任何已初始化的 Agent
